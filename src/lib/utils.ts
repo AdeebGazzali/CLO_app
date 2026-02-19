@@ -1,0 +1,74 @@
+
+export const generateId = () => Math.random().toString(36).substr(2, 9);
+export const getDayName = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long' });
+export const formatDate = (date: Date) => date.toISOString().split('T')[0];
+
+export const getColorForType = (type: string) => {
+    switch (type) {
+        case 'WORK': return 'border-zinc-500 bg-zinc-900/50 text-zinc-100';
+        case 'SPIRITUAL': return 'border-indigo-500 bg-indigo-900/30 text-indigo-100';
+        case 'PHYSICAL': return 'border-emerald-500 bg-emerald-900/30 text-emerald-100';
+        case 'COACHING': return 'border-amber-500 bg-amber-900/30 text-amber-100';
+        case 'CHAOS': return 'border-rose-600 bg-rose-900/40 text-rose-100 animate-pulse-slow';
+        case 'STUDY': return 'border-blue-500 bg-blue-900/30 text-blue-100';
+        case 'REST': return 'border-slate-600 bg-slate-800/30 text-slate-300';
+        case 'TRANSIT': return 'border-gray-700 bg-black text-gray-400';
+        default: return 'border-gray-700 bg-gray-900 text-gray-300';
+    }
+};
+
+export const INITIAL_SCHEDULE_TEMPLATES: Record<string, any[]> = {
+  Monday: [
+    { time: '08:30-17:30', activity: 'Office Work', type: 'WORK' },
+    { time: '18:20-19:00', activity: 'IFTAAR', type: 'SPIRITUAL' },
+    { time: '20:30-22:00', activity: 'Tharaweeh', type: 'SPIRITUAL' },
+    { time: '22:15-23:00', activity: 'Gym (Upper Body)', type: 'PHYSICAL' },
+    { time: '23:00-00:00', activity: 'Study Block (Assign 1)', type: 'STUDY' },
+  ],
+  Tuesday: [
+    { time: '10:30-12:30', activity: 'Uni Lecture (Mobile App Dev)', type: 'STUDY' },
+    { time: '12:30-15:30', activity: 'Rest (Anime / Reading)', type: 'REST' },
+    { time: '15:30-17:30', activity: 'Uni Tutorial', type: 'STUDY' },
+    { time: '18:20-19:00', activity: 'IFTAAR', type: 'SPIRITUAL' },
+    { time: '20:30-22:00', activity: 'Tharaweeh', type: 'SPIRITUAL' },
+    { time: '22:15-23:00', activity: 'RUN #1', type: 'PHYSICAL', link: 'fitness' },
+  ],
+  Wednesday: [
+    { time: '08:30-17:30', activity: 'Office Work', type: 'WORK' },
+    { time: '18:20-19:00', activity: 'IFTAAR', type: 'SPIRITUAL' },
+    { time: '20:30-22:00', activity: 'Tharaweeh', type: 'SPIRITUAL' },
+    { time: '22:15-23:45', activity: 'Study Block (Android Dev)', type: 'STUDY' },
+  ],
+  Thursday: [
+    { time: '08:30-17:30', activity: 'Office Work', type: 'WORK' },
+    { time: '18:20-19:00', activity: 'IFTAAR', type: 'SPIRITUAL' },
+    { time: '20:30-22:00', activity: 'Tharaweeh', type: 'SPIRITUAL' },
+    { time: '22:15-23:00', activity: 'RUN #2', type: 'PHYSICAL', link: 'fitness' },
+  ],
+  Friday: [
+    { time: '08:30-17:00', activity: 'Office Work', type: 'WORK' },
+    { time: '17:00-18:00', activity: 'Transit to Port City', type: 'TRANSIT' },
+    { time: '18:00-21:00', activity: 'Coaching: Savinu', type: 'COACHING', meta: { client: 'Savinu' } },
+    { time: '18:20', activity: 'IFTAAR on track', type: 'SPIRITUAL' },
+    { time: '20:00-21:00', activity: '⚠️ CHAOS HOUR', type: 'CHAOS' },
+    { time: '21:00-22:00', activity: 'Coaching: Umar', type: 'COACHING', meta: { client: 'Umar' } },
+    { time: '22:00', activity: 'Track Closed/Home', type: 'TRANSIT' },
+  ],
+  Saturday: [
+    { time: '10:00', activity: 'Sleep In/Recovery', type: 'REST' },
+    { time: '10:30-14:00', activity: 'Study & Reading', type: 'STUDY' },
+    { time: '14:00-17:00', activity: 'Coaching: Savinu', type: 'COACHING', meta: { client: 'Savinu' } },
+    { time: '18:00-20:00', activity: 'Date Night w/ Anali', type: 'REST' },
+    { time: '18:20', activity: 'IFTAAR', type: 'SPIRITUAL' },
+    { time: '20:00-22:00', activity: 'RUN #3', type: 'PHYSICAL', link: 'fitness' },
+  ],
+  Sunday: [
+    { time: '10:00-13:00', activity: 'Downtime', type: 'REST' },
+    { time: '13:00-14:00', activity: 'Prep', type: 'OTHER' },
+    { time: '14:00-15:00', activity: 'Transit to Bandaragama', type: 'TRANSIT' },
+    { time: '15:00-18:00', activity: 'Coaching: Piers', type: 'COACHING', meta: { client: 'Piers' } },
+    { time: '18:00-20:00', activity: 'Transit to Port City', type: 'TRANSIT' },
+    { time: '20:00-22:00', activity: 'Coaching: Umar', type: 'COACHING', meta: { client: 'Umar' } },
+    { time: '22:00', activity: 'Weekly Review', type: 'STUDY' },
+  ],
+};
