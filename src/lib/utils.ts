@@ -1,19 +1,37 @@
 
+
 export const generateId = () => Math.random().toString(36).substr(2, 9);
 export const getDayName = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long' });
-export const formatDate = (date: Date) => date.toISOString().split('T')[0];
+export const formatDate = (date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+export const getDaysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+export const getFirstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
 
 export const getColorForType = (type: string) => {
-    switch (type) {
-        case 'WORK': return 'border-zinc-500 bg-zinc-900/50 text-zinc-100';
-        case 'SPIRITUAL': return 'border-indigo-500 bg-indigo-900/30 text-indigo-100';
-        case 'PHYSICAL': return 'border-emerald-500 bg-emerald-900/30 text-emerald-100';
-        case 'COACHING': return 'border-amber-500 bg-amber-900/30 text-amber-100';
-        case 'CHAOS': return 'border-rose-600 bg-rose-900/40 text-rose-100 animate-pulse-slow';
-        case 'STUDY': return 'border-blue-500 bg-blue-900/30 text-blue-100';
-        case 'REST': return 'border-slate-600 bg-slate-800/30 text-slate-300';
-        case 'TRANSIT': return 'border-gray-700 bg-black text-gray-400';
-        default: return 'border-gray-700 bg-gray-900 text-gray-300';
+    if (!type) return 'border-zinc-700 bg-zinc-900/50 text-zinc-300';
+    switch (type.toUpperCase()) {
+        case 'GENERAL':
+        case 'WORK':
+        case 'STUDY':
+        case 'TRANSIT':
+        case 'REST':
+        case 'OTHER':
+             return 'border-zinc-500 bg-zinc-900/50 text-zinc-100';
+        case 'RELIGIOUS':
+        case 'SPIRITUAL':
+             return 'border-indigo-500 bg-indigo-900/30 text-indigo-100';
+        case 'FITNESS':
+        case 'PHYSICAL':
+             return 'border-emerald-500 bg-emerald-900/30 text-emerald-100';
+        case 'COACHING':
+             return 'border-amber-500 bg-amber-900/30 text-amber-100';
+        case 'CHAOS':
+             return 'border-rose-600 bg-rose-900/40 text-rose-100 animate-pulse-slow';
+        default: return 'border-zinc-700 bg-zinc-900/50 text-zinc-300';
     }
 };
 
@@ -72,3 +90,52 @@ export const INITIAL_SCHEDULE_TEMPLATES: Record<string, any[]> = {
     { time: '22:00', activity: 'Weekly Review', type: 'STUDY' },
   ],
 };
+
+export const generateRecurrencePayloads = (baseData: any, user_id: string, recurrenceRule: string, interval: number, endDateStr?: string, customDays: number[] = []) => {
+    const payloads: any[] = [];
+    let currentDate = new Date(baseData.date);
+    let endDate = endDateStr ? new Date(endDateStr) : new Date(new Date(baseData.date).setMonth(currentDate.getMonth() + 12)); // Cap at 1 year
+
+    const seriesId = crypto.randomUUID();
+
+    while (currentDate <= endDate) {
+        // Only push payload if it's not CUSTOM_DAYS, or if it IS CUSTOM_DAYS and today matches the selected days.
+        if (recurrenceRule !== 'CUSTOM_DAYS' || customDays.includes(currentDate.getDay())) {
+            payloads.push({
+                user_id: user_id,
+                series_id: seriesId,
+                date: formatDate(currentDate),
+                activity: baseData.activity,
+                time_range: baseData.time_range,
+                location: baseData.location,
+                type: baseData.type,
+                is_priority: baseData.is_priority,
+                is_goal: baseData.is_goal,
+                end_date: baseData.endDate || null,
+                meta: baseData.meta || {},
+                completed: false
+            });
+        }
+
+        // Advance date
+        if (recurrenceRule === 'DAILY' || recurrenceRule === 'CUSTOM_DAYS') {
+            currentDate.setDate(currentDate.getDate() + 1);
+        } else if (recurrenceRule === 'WEEKLY') {
+            currentDate.setDate(currentDate.getDate() + 7);
+        } else if (recurrenceRule === 'MONTHLY') {
+            currentDate.setMonth(currentDate.getMonth() + 1);
+        } else if (recurrenceRule === 'CUSTOM') {
+            currentDate.setDate(currentDate.getDate() + (interval || 1));
+        } else {
+            break; // NONE
+        }
+    }
+
+    // If it was NONE, we still only generated 1 payload above, but we don't need a series ID.
+    if (recurrenceRule === 'NONE' && payloads.length > 0) {
+        payloads[0].series_id = null;
+    }
+
+    return payloads;
+};
+

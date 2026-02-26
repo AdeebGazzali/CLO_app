@@ -1,5 +1,4 @@
-
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Calendar as CalendarIcon, Dumbbell, Users, Wallet } from 'lucide-react';
 import AuthCheck from './components/AuthCheck';
 import CommandCenter from './views/CommandCenter';
@@ -10,9 +9,14 @@ import WealthArchitecture from './views/WealthArchitecture';
 export default function App() {
     const [activeTab, setActiveTab] = useState<'daily' | 'fitness' | 'coach' | 'wallet'>('daily');
 
+    // Scroll to top on tab change
+    useEffect(() => {
+        window.scrollTo(0, 0);
+    }, [activeTab]);
+
     return (
         <AuthCheck>
-            <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 max-w-md mx-auto relative shadow-2xl overflow-hidden font-sans selection:bg-indigo-500/30">
+            <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 max-w-md mx-auto relative shadow-2xl font-sans selection:bg-indigo-500/30">
 
                 {/* Top Bar */}
                 <div className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md p-4 border-b border-zinc-900 flex justify-between items-center">
@@ -33,11 +37,16 @@ export default function App() {
                 </main>
 
                 {/* Bottom Navigation */}
-                <nav className="fixed bottom-0 w-full max-w-md bg-[#0a0a0a]/95 border-t border-zinc-800 backdrop-blur-lg pb-safe">
+                <nav className="fixed bottom-0 w-full max-w-md bg-[#0a0a0a]/95 border-t border-zinc-800 backdrop-blur-lg pb-safe z-50">
                     <div className="flex justify-around items-center p-2">
-                        <button onClick={() => setActiveTab('daily')} className={`flex flex-col items-center p-2 rounded-xl transition ${activeTab === 'daily' ? 'text-indigo-400' : 'text-zinc-600 hover:text-zinc-400'}`}>
+                        <button onClick={() => {
+                            if (activeTab === 'daily') {
+                                window.dispatchEvent(new Event('resetCalendarView'));
+                            }
+                            setActiveTab('daily');
+                        }} className={`flex flex-col items-center p-2 rounded-xl transition ${activeTab === 'daily' ? 'text-indigo-400' : 'text-zinc-600 hover:text-zinc-400'}`}>
                             <CalendarIcon className="w-6 h-6 mb-1" />
-                            <span className="text-[10px] font-bold">Daily</span>
+                            <span className="text-[10px] font-bold">Calendar</span>
                         </button>
                         <button onClick={() => setActiveTab('fitness')} className={`flex flex-col items-center p-2 rounded-xl transition ${activeTab === 'fitness' ? 'text-emerald-400' : 'text-zinc-600 hover:text-zinc-400'}`}>
                             <Dumbbell className="w-6 h-6 mb-1" />
