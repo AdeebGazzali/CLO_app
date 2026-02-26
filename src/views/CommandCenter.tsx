@@ -25,6 +25,7 @@ export default function CommandCenter() {
     const [monthData, setMonthData] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'day' | 'month'>('month');
+    const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
 
     // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -318,6 +319,7 @@ export default function CommandCenter() {
     };
 
     const handleNavigate = (direction: 'prev' | 'next') => {
+        setSwipeDirection(direction === 'next' ? 1 : -1);
         const newDate = new Date(currentDate);
         if (viewMode === 'day') {
             newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
@@ -328,11 +330,17 @@ export default function CommandCenter() {
     };
 
     const handleDragEnd = (_: any, info: PanInfo) => {
-        if (info.offset.x < -100 || info.velocity.x < -400) {
+        if (info.offset.x < -50 || info.velocity.x < -300) {
             handleNavigate('next');
-        } else if (info.offset.x > 100 || info.velocity.x > 400) {
+        } else if (info.offset.x > 50 || info.velocity.x > 300) {
             handleNavigate('prev');
         }
+    };
+
+    const swipeVariants = {
+        enter: (dir: number) => ({ opacity: 0, x: dir * 120 }),
+        center: { opacity: 1, x: 0 },
+        exit: (dir: number) => ({ opacity: 0, x: dir * -120 }),
     };
 
     return (
@@ -393,18 +401,21 @@ export default function CommandCenter() {
             {viewMode === 'day' ? (
                 // DAY VIEW
                 <div className="overflow-hidden min-h-[50vh]">
-                    <AnimatePresence mode="popLayout" initial={false}>
+                    <AnimatePresence mode="wait" initial={false} custom={swipeDirection}>
                         <motion.div
                             key={currentDate.toISOString()}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            transition={{ duration: 0.15, ease: 'easeOut' }}
+                            custom={swipeDirection}
+                            variants={swipeVariants}
+                            initial="enter"
+                            animate="center"
+                            exit="exit"
+                            transition={{ type: 'spring', stiffness: 300, damping: 30, mass: 0.8 }}
                             drag="x"
                             dragConstraints={{ left: 0, right: 0 }}
-                            dragElastic={0.2}
+                            dragElastic={0.4}
                             onDragEnd={handleDragEnd}
-                            className={`space-y-3 px-1 w-full transition-opacity duration-300 ${loading ? 'opacity-50 pointer-events-none' : ''}`}
+                            style={{ willChange: 'transform, opacity' }}
+                            className={`space-y-3 px-1 w-full ${loading ? 'opacity-50 pointer-events-none' : ''}`}
                         >
                             {scheduleData.map((block) => (
                                 <ActivityBlock
@@ -437,17 +448,20 @@ export default function CommandCenter() {
             ) : (
                 // MONTH VIEW
                 <div className="overflow-hidden min-h-[60vh] flex flex-col">
-                    <AnimatePresence mode="popLayout" initial={false}>
+                    <AnimatePresence mode="wait" initial={false} custom={swipeDirection}>
                         <motion.div
                             key={currentDate.getMonth() + '-' + currentDate.getFullYear()}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            transition={{ duration: 0.15, ease: 'easeOut' }}
+                            custom={swipeDirection}
+                            variants={swipeVariants}
+                            initial="enter"
+                            animate="center"
+                            exit="exit"
+                            transition={{ type: 'spring', stiffness: 300, damping: 30, mass: 0.8 }}
                             drag="x"
                             dragConstraints={{ left: 0, right: 0 }}
-                            dragElastic={0.2}
+                            dragElastic={0.4}
                             onDragEnd={handleDragEnd}
+                            style={{ willChange: 'transform, opacity' }}
                             className="space-y-6 flex-1 flex flex-col"
                         >
                             <CalendarGrid
