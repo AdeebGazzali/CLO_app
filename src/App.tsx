@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Calendar as CalendarIcon, Dumbbell, Users, Wallet } from 'lucide-react';
+import { Calendar as CalendarIcon, Dumbbell, Users, Wallet, Download, X } from 'lucide-react';
 import AuthCheck from './components/AuthCheck';
 import CommandCenter from './views/CommandCenter';
 import FitnessCenter from './views/FitnessCenter';
@@ -8,15 +8,62 @@ import WealthArchitecture from './views/WealthArchitecture';
 
 export default function App() {
     const [activeTab, setActiveTab] = useState<'daily' | 'fitness' | 'coach' | 'wallet'>('daily');
+    const [installPrompt, setInstallPrompt] = useState<any>(null);
+    const [showInstallBanner, setShowInstallBanner] = useState(false);
 
     // Scroll to top on tab change
     useEffect(() => {
         window.scrollTo(0, 0);
     }, [activeTab]);
 
+    // Capture the PWA install prompt
+    useEffect(() => {
+        // Don't show if already in standalone mode
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+            || (window.navigator as any).standalone === true;
+        if (isStandalone) return;
+
+        const handler = (e: Event) => {
+            e.preventDefault();
+            setInstallPrompt(e);
+            setShowInstallBanner(true);
+        };
+
+        window.addEventListener('beforeinstallprompt', handler);
+        return () => window.removeEventListener('beforeinstallprompt', handler);
+    }, []);
+
+    const handleInstall = async () => {
+        if (!installPrompt) return;
+        installPrompt.prompt();
+        const result = await installPrompt.userChoice;
+        if (result.outcome === 'accepted') {
+            setShowInstallBanner(false);
+            setInstallPrompt(null);
+        }
+    };
+
     return (
         <AuthCheck>
             <div className="min-h-screen bg-[#0a0a0a] text-zinc-100 max-w-md mx-auto relative shadow-2xl font-sans selection:bg-indigo-500/30">
+
+                {/* PWA Install Banner */}
+                {showInstallBanner && (
+                    <div className="bg-indigo-600 px-4 py-3 flex items-center justify-between gap-3 z-[60] relative">
+                        <div className="flex items-center gap-3">
+                            <Download className="w-5 h-5 text-white shrink-0" />
+                            <span className="text-sm font-bold text-white">Install CLO for the full app experience</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                            <button onClick={handleInstall} className="px-3 py-1.5 bg-white text-indigo-600 font-bold text-xs rounded-lg hover:bg-indigo-50 transition-colors">
+                                Install
+                            </button>
+                            <button onClick={() => setShowInstallBanner(false)} className="p-1 text-white/70 hover:text-white transition-colors">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                    </div>
+                )}
 
                 {/* Top Bar */}
                 <div className="sticky top-0 z-50 bg-[#0a0a0a]/80 backdrop-blur-md p-4 border-b border-zinc-900 flex justify-between items-center">
