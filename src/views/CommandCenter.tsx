@@ -414,8 +414,8 @@ export default function CommandCenter() {
                             dragConstraints={{ left: 0, right: 0 }}
                             dragElastic={0.4}
                             onDragEnd={handleDragEnd}
-                            style={{ willChange: 'transform, opacity' }}
-                            className={`space-y-3 px-1 w-full ${loading ? 'opacity-50 pointer-events-none' : ''}`}
+                            style={{ willChange: 'transform, opacity', touchAction: 'pan-y' }}
+                            className={`space-y-3 px-1 w-full min-h-[60vh] ${loading ? 'opacity-50 pointer-events-none' : ''}`}
                         >
                             {scheduleData.map((block) => (
                                 <ActivityBlock
