@@ -24,6 +24,7 @@ const FITNESS_SUBTYPES = ['RUN', 'GYM', 'CYCLE', 'SWIM'];
 
 export default function AddEventWizard({ isOpen, onClose, onSave, initialDate, initialData }: EventWizardProps) {
     const [step, setStep] = useState<WizardStep>('TYPE');
+    const [isCustomClient, setIsCustomClient] = useState(false);
 
     const [formData, setFormData] = useState({
         type: '',
@@ -223,17 +224,35 @@ export default function AddEventWizard({ isOpen, onClose, onSave, initialDate, i
                         <label className="block text-xs font-bold text-amber-500 uppercase mb-2">Client Name</label>
                         <select
                             required
-                            value={formData.clientName}
-                            onChange={e => setFormData({ ...formData, clientName: e.target.value })}
+                            value={isCustomClient ? '__CUSTOM__' : formData.clientName}
+                            onChange={e => {
+                                if (e.target.value === '__CUSTOM__') {
+                                    setIsCustomClient(true);
+                                    setFormData({ ...formData, clientName: '' });
+                                } else {
+                                    setIsCustomClient(false);
+                                    setFormData({ ...formData, clientName: e.target.value });
+                                }
+                            }}
                             className="w-full bg-black/50 border border-amber-900/50 rounded-xl p-4 text-amber-100 focus:border-amber-500 outline-none transition appearance-none"
                         >
                             <option value="">Select a Client...</option>
-                            <option value="Umar">Umar</option>
-                            <option value="Shamil">Shamil</option>
-                            <option value="Irfan">Irfan</option>
-                            <option value="Ranjeev">Ranjeev</option>
-                            <option value="Online Client">Online Client</option>
+                            <option value="Umar Zeeshan">Umar Zeeshan</option>
+                            <option value="Savinu Silva">Savinu Silva</option>
+                            <option value="Piers De Mel">Piers De Mel</option>
+                            <option value="Yeshan Mandanayake">Yeshan Mandanayake</option>
+                            <option value="__CUSTOM__">+ Add New Client...</option>
                         </select>
+                        {isCustomClient && (
+                            <input
+                                type="text"
+                                autoFocus
+                                placeholder="Enter client name..."
+                                className="w-full mt-3 bg-black/50 border border-amber-900/50 rounded-xl p-4 text-amber-100 focus:border-amber-500 outline-none transition"
+                                value={formData.clientName === '__CUSTOM__' ? '' : formData.clientName}
+                                onChange={e => setFormData({ ...formData, clientName: e.target.value })}
+                            />
+                        )}
                     </div>
                     <div>
                         <label className="block text-xs font-bold text-zinc-500 uppercase mb-2">Location Facility</label>
