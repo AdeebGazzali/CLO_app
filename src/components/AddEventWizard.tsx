@@ -151,7 +151,7 @@ export default function AddEventWizard({ isOpen, onClose, onSave, initialDate, i
                         <button
                             key={cat.id}
                             onClick={() => {
-                                setFormData({ ...formData, type: cat.id });
+                                setFormData({ ...formData, type: cat.id, is_priority: cat.id === 'COACHING' ? true : formData.is_priority });
                                 if (cat.id === 'FITNESS') setStep('SUBTYPE');
                                 else if (cat.id === 'COACHING') setStep('DETAILS');
                                 else setStep('DETAILS');
