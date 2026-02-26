@@ -353,7 +353,7 @@ export default function CommandCenter() {
             />
 
             {/* Sticky Header Group - Island Design updated to unified header */}
-            <div className="sticky top-[60px] z-40 -mx-4 -mt-4 mb-4 py-4 px-4 bg-[#0a0a0a]/95 backdrop-blur-xl border-b border-zinc-800/50 shadow-2xl flex items-center justify-between gap-2">
+            <div className="sticky top-[60px] md:static md:top-auto z-40 -mx-4 -mt-4 mb-4 md:-mx-0 md:-mt-0 md:mb-6 py-4 px-4 md:p-0 bg-[#0a0a0a]/95 md:bg-transparent backdrop-blur-xl md:backdrop-blur-none border-b border-zinc-800/50 md:border-none shadow-2xl md:shadow-none flex items-center justify-between gap-2">
 
                 {/* 1. Spacer (Left) */}
                 <div className="w-10 h-10 shrink-0" />
@@ -390,150 +390,211 @@ export default function CommandCenter() {
                 <div className="w-10 h-10 shrink-0" />
             </div >
 
-            {viewMode === 'day' ? (
-                // DAY VIEW
-                <div className="overflow-hidden min-h-[50vh]">
-                    <AnimatePresence mode="popLayout" initial={false}>
-                        <motion.div
-                            key={currentDate.toISOString()}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            transition={{ duration: 0.15, ease: 'easeOut' }}
-                            drag="x"
-                            dragConstraints={{ left: 0, right: 0 }}
-                            dragElastic={0.2}
-                            onDragEnd={handleDragEnd}
-                            className={`space-y-3 px-1 w-full transition-opacity duration-300 ${loading ? 'opacity-50 pointer-events-none' : ''}`}
-                        >
-                            {scheduleData.map((block) => (
-                                <ActivityBlock
-                                    key={block.id}
-                                    block={block}
-                                    onCheck={handleCheckBlock}
-                                    onClick={() => { setSelectedActivity(block); setIsDetailsModalOpen(true); }}
-                                    isOverlapping={(() => {
-                                        if (block.time_range === 'Anytime') return false;
-                                        const [start, end] = block.time_range.split('-');
-                                        if (!start || !end) return false;
-                                        const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
-                                        const st = toMin(start); const et = toMin(end);
-                                        return scheduleData.some(other => {
-                                            if (other.id === block.id || other.time_range === 'Anytime') return false;
-                                            const [ostart, oend] = other.time_range.split('-');
-                                            if (!ostart || !oend) return false;
-                                            const ost = toMin(ostart); const oet = toMin(oend);
-                                            return Math.max(st, ost) < Math.min(et, oet);
-                                        });
-                                    })()}
+            {/* Mobile View */}
+            <div className="md:hidden">
+                {viewMode === 'day' ? (
+                    // DAY VIEW
+                    <div className="overflow-hidden min-h-[50vh]">
+                        <AnimatePresence mode="popLayout" initial={false}>
+                            <motion.div
+                                key={currentDate.toISOString()}
+                                initial={{ opacity: 0, x: 20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: -20 }}
+                                transition={{ duration: 0.15, ease: 'easeOut' }}
+                                drag="x"
+                                dragConstraints={{ left: 0, right: 0 }}
+                                dragElastic={0.2}
+                                onDragEnd={handleDragEnd}
+                                className={`space-y-3 px-1 w-full transition-opacity duration-300 ${loading ? 'opacity-50 pointer-events-none' : ''}`}
+                            >
+                                {scheduleData.map((block) => (
+                                    <ActivityBlock
+                                        key={block.id}
+                                        block={block}
+                                        onCheck={handleCheckBlock}
+                                        onClick={() => { setSelectedActivity(block); setIsDetailsModalOpen(true); }}
+                                        isOverlapping={(() => {
+                                            if (block.time_range === 'Anytime') return false;
+                                            const [start, end] = block.time_range.split('-');
+                                            if (!start || !end) return false;
+                                            const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+                                            const st = toMin(start); const et = toMin(end);
+                                            return scheduleData.some(other => {
+                                                if (other.id === block.id || other.time_range === 'Anytime') return false;
+                                                const [ostart, oend] = other.time_range.split('-');
+                                                if (!ostart || !oend) return false;
+                                                const ost = toMin(ostart); const oet = toMin(oend);
+                                                return Math.max(st, ost) < Math.min(et, oet);
+                                            });
+                                        })()}
+                                    />
+                                ))}
+                                {scheduleData.length === 0 && (
+                                    <div className="text-center py-10 text-zinc-500 bg-zinc-900/20 rounded-xl border border-zinc-800 border-dashed m-1">No scheduled blocks.</div>
+                                )}
+                            </motion.div>
+                        </AnimatePresence>
+                    </div>
+                ) : (
+                    // MONTH VIEW
+                    <div className="overflow-hidden min-h-[60vh] flex flex-col">
+                        <AnimatePresence mode="popLayout" initial={false}>
+                            <motion.div
+                                key={currentDate.getMonth() + '-' + currentDate.getFullYear()}
+                                initial={{ opacity: 0, x: 20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: -20 }}
+                                transition={{ duration: 0.15, ease: 'easeOut' }}
+                                drag="x"
+                                dragConstraints={{ left: 0, right: 0 }}
+                                dragElastic={0.2}
+                                onDragEnd={handleDragEnd}
+                                className="space-y-6 flex-1 flex flex-col"
+                            >
+                                <CalendarGrid
+                                    currentDate={currentDate}
+                                    monthData={monthData}
+                                    onDateClick={(date) => { setCurrentDate(date); setViewMode('day'); }}
                                 />
-                            ))}
-                            {scheduleData.length === 0 && (
-                                <div className="text-center py-10 text-zinc-500">No scheduled blocks.</div>
-                            )}
-                        </motion.div>
-                    </AnimatePresence>
-                </div>
-            ) : (
-                // MONTH VIEW
-                <div className="overflow-hidden min-h-[60vh] flex flex-col">
-                    <AnimatePresence mode="popLayout" initial={false}>
-                        <motion.div
-                            key={currentDate.getMonth() + '-' + currentDate.getFullYear()}
-                            initial={{ opacity: 0, x: 20 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0, x: -20 }}
-                            transition={{ duration: 0.15, ease: 'easeOut' }}
-                            drag="x"
-                            dragConstraints={{ left: 0, right: 0 }}
-                            dragElastic={0.2}
-                            onDragEnd={handleDragEnd}
-                            className="space-y-6 flex-1 flex flex-col"
-                        >
-                            <CalendarGrid
-                                currentDate={currentDate}
-                                monthData={monthData}
-                                onDateClick={(date) => { setCurrentDate(date); }}
-                            />
 
-                            {/* Minimalist Day Preview */}
-                            <div className="px-3 pb-8 flex-1 group">
-                                <div
-                                    className="flex items-center justify-between mb-3 pl-2 cursor-pointer transition-colors hover:bg-zinc-900/40 p-1.5 rounded-lg -ml-1.5"
-                                    onClick={() => setViewMode('day')}
-                                >
-                                    <h3 className="text-zinc-400 font-bold text-[10px] uppercase tracking-widest">
-                                        {formatDate(currentDate) === formatDate(new Date()) ? "Today's Focus" : "Day Focus"}
-                                    </h3>
-                                    <span className="text-[10px] text-zinc-600 group-hover:text-indigo-400 transition-colors flex items-center gap-1">
-                                        Enter Daily View <ChevronRight className="w-3 h-3" />
-                                    </span>
-                                </div>
+                                {/* Minimalist Day Preview (Hidden on Desktop) */}
+                                <div className="px-3 pb-8 flex-1 group">
+                                    <div
+                                        className="flex items-center justify-between mb-3 pl-2 cursor-pointer transition-colors hover:bg-zinc-900/40 p-1.5 rounded-lg -ml-1.5"
+                                        onClick={() => setViewMode('day')}
+                                    >
+                                        <h3 className="text-zinc-400 font-bold text-[10px] uppercase tracking-widest">
+                                            {formatDate(currentDate) === formatDate(new Date()) ? "Today's Focus" : "Day Focus"}
+                                        </h3>
+                                        <span className="text-[10px] text-zinc-600 group-hover:text-indigo-400 transition-colors flex items-center gap-1">
+                                            Enter Daily View <ChevronRight className="w-3 h-3" />
+                                        </span>
+                                    </div>
 
-                                <div className="space-y-2">
-                                    {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
-                                        scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
-                                            <div key={block.id + '-mini'} onClick={() => setViewMode('day')} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800/30 bg-zinc-900/30 cursor-pointer hover:bg-zinc-800/50 transition-colors">
-                                                <div className={`w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0 shadow-inner ${block.type === 'FITNESS'
-                                                    ? block.activity.toUpperCase().includes('SWIM') ? 'text-cyan-400'
-                                                        : block.activity.toUpperCase().includes('CYCLE') ? 'text-orange-400'
-                                                            : block.activity.toUpperCase().includes('GYM') ? 'text-indigo-400'
-                                                                : 'text-emerald-400'
-                                                    : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
-                                                    }`}>
-                                                    {block.type === 'FITNESS' ? (
-                                                        block.activity.toUpperCase().includes('SWIM') ? <Waves className="w-4 h-4" /> :
-                                                            block.activity.toUpperCase().includes('CYCLE') ? <Bike className="w-4 h-4" /> :
-                                                                block.activity.toUpperCase().includes('GYM') ? <Dumbbell className="w-4 h-4" /> :
-                                                                    <Footprints className="w-4 h-4" />
-                                                    ) : block.type === 'COACHING' ? <UsersIcon className="w-4 h-4" />
-                                                        : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
-                                                    }
+                                    <div className="space-y-2">
+                                        {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
+                                            scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
+                                                <div key={block.id + '-mini'} onClick={() => setViewMode('day')} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800/30 bg-zinc-900/30 cursor-pointer hover:bg-zinc-800/50 transition-colors">
+                                                    <div className={`w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0 shadow-inner ${block.type === 'FITNESS'
+                                                        ? block.activity.toUpperCase().includes('SWIM') ? 'text-cyan-400'
+                                                            : block.activity.toUpperCase().includes('CYCLE') ? 'text-orange-400'
+                                                                : block.activity.toUpperCase().includes('GYM') ? 'text-indigo-400'
+                                                                    : 'text-emerald-400'
+                                                        : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
+                                                        }`}>
+                                                        {block.type === 'FITNESS' ? (
+                                                            block.activity.toUpperCase().includes('SWIM') ? <Waves className="w-4 h-4" /> :
+                                                                block.activity.toUpperCase().includes('CYCLE') ? <Bike className="w-4 h-4" /> :
+                                                                    block.activity.toUpperCase().includes('GYM') ? <Dumbbell className="w-4 h-4" /> :
+                                                                        <Footprints className="w-4 h-4" />
+                                                        ) : block.type === 'COACHING' ? <UsersIcon className="w-4 h-4" />
+                                                            : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
+                                                        }
+                                                    </div>
+                                                    <div className="flex-[0.3] min-w-[50px]">
+                                                        <span className="text-[11px] font-mono text-zinc-500 block leading-tight">{block.time_range === 'Anytime' ? '--:--' : block.time_range.split('-')[0] || block.time_range}</span>
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <h3 className="font-bold text-sm text-zinc-300 truncate">{block.activity}</h3>
+                                                        {block.type === 'FITNESS' && (block.meta?.run_type || block.meta?.distance_cmd) && (
+                                                            <span className="text-[10px] text-zinc-500 block truncate mt-0.5">
+                                                                {[block.meta.run_type, block.meta.distance_cmd].filter(Boolean).join(' • ')}
+                                                            </span>
+                                                        )}
+                                                        {block.type === 'COACHING' && block.location && (
+                                                            <span className="text-[10px] text-zinc-500 block truncate mt-0.5">
+                                                                {block.location}
+                                                            </span>
+                                                        )}
+                                                    </div>
                                                 </div>
-                                                <div className="flex-[0.3] min-w-[50px]">
-                                                    <span className="text-[11px] font-mono text-zinc-500 block leading-tight">{block.time_range === 'Anytime' ? '--:--' : block.time_range.split('-')[0] || block.time_range}</span>
-                                                </div>
-                                                <div className="flex-1 min-w-0">
-                                                    <h3 className="font-bold text-sm text-zinc-300 truncate">{block.activity}</h3>
-                                                    {block.type === 'FITNESS' && (block.meta?.run_type || block.meta?.distance_cmd) && (
-                                                        <span className="text-[10px] text-zinc-500 block truncate mt-0.5">
-                                                            {[block.meta.run_type, block.meta.distance_cmd].filter(Boolean).join(' • ')}
-                                                        </span>
-                                                    )}
-                                                    {block.type === 'COACHING' && block.location && (
-                                                        <span className="text-[10px] text-zinc-500 block truncate mt-0.5">
-                                                            {block.location}
-                                                        </span>
-                                                    )}
-                                                </div>
+                                            ))
+                                        ) : (
+                                            <div
+                                                onClick={(e) => { e.stopPropagation(); setEditingEvent(null); setIsModalOpen(true); }}
+                                                className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                                            >
+                                                <span className="text-xs text-zinc-600 font-medium">
+                                                    {scheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
+                                                </span>
+                                                <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
+                                                    <Plus className="w-3.5 h-3.5" /> Quick Add
+                                                </button>
                                             </div>
-                                        ))
-                                    ) : (
-                                        <div
-                                            onClick={(e) => { e.stopPropagation(); setEditingEvent(null); setIsModalOpen(true); }}
-                                            className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
-                                        >
-                                            <span className="text-xs text-zinc-600 font-medium">
-                                                {scheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
-                                            </span>
-                                            <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
-                                                <Plus className="w-3.5 h-3.5" /> Quick Add
-                                            </button>
-                                        </div>
-                                    )}
-                                    {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 &&
-                                        scheduleData.length > Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3) ? (
-                                        <div onClick={() => setViewMode('day')} className="text-center text-xs text-zinc-500 pt-1 font-medium cursor-pointer hover:text-indigo-400 transition-colors">
-                                            +{scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)} more scheduled block{(scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)) > 1 ? 's' : ''}
-                                        </div>
-                                    ) : null}
+                                        )}
+                                        {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 &&
+                                            scheduleData.length > Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3) ? (
+                                            <div onClick={() => setViewMode('day')} className="text-center text-xs text-zinc-500 pt-1 font-medium cursor-pointer hover:text-indigo-400 transition-colors">
+                                                +{scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)} more scheduled block{(scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)) > 1 ? 's' : ''}
+                                            </div>
+                                        ) : null}
+                                    </div>
                                 </div>
-                            </div>
+                            </motion.div>
+                        </AnimatePresence>
+                    </div>
+                )}
+            </div>
 
-                        </motion.div>
-                    </AnimatePresence>
+            {/* Desktop Split View */}
+            <div className="hidden md:grid md:grid-cols-12 md:gap-10 items-start">
+                <div className="col-span-7 xl:col-span-7 sticky top-24 space-y-8">
+                    <div className="bg-zinc-900/50 p-6 rounded-3xl border border-zinc-800/80 shadow-2xl">
+                        <CalendarGrid
+                            currentDate={currentDate}
+                            monthData={monthData}
+                            onDateClick={(date) => { setCurrentDate(date); }}
+                        />
+                    </div>
+
+                    <button
+                        onClick={() => { setEditingEvent(null); setIsModalOpen(true); }}
+                        className="w-full py-4 bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.3)] shadow-indigo-600/30 flex items-center justify-center gap-2 transition-all active:scale-95 border border-indigo-500/50 rounded-2xl font-bold"
+                    >
+                        <Plus className="w-5 h-5" /> Schedule Activity
+                    </button>
                 </div>
-            )}
+
+                <div className="col-span-5 xl:col-span-5">
+                    <div className="flex items-center justify-between mb-6 pb-4 border-b border-zinc-800/50">
+                        <h2 className="text-2xl font-black text-white px-2">
+                            {formatDate(currentDate) === formatDate(new Date()) ? 'Today\'s Objective' : currentDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric' })}
+                        </h2>
+                    </div>
+
+                    <div className={`space-y-3 px-1 w-full transition-opacity duration-300 ${loading ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {scheduleData.map((block) => (
+                            <ActivityBlock
+                                key={block.id + '-desktop'}
+                                block={block}
+                                onCheck={handleCheckBlock}
+                                onClick={() => { setSelectedActivity(block); setIsDetailsModalOpen(true); }}
+                                isOverlapping={(() => {
+                                    if (block.time_range === 'Anytime') return false;
+                                    const [start, end] = block.time_range.split('-');
+                                    if (!start || !end) return false;
+                                    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+                                    const st = toMin(start); const et = toMin(end);
+                                    return scheduleData.some(other => {
+                                        if (other.id === block.id || other.time_range === 'Anytime') return false;
+                                        const [ostart, oend] = other.time_range.split('-');
+                                        if (!ostart || !oend) return false;
+                                        const ost = toMin(ostart); const oet = toMin(oend);
+                                        return Math.max(st, ost) < Math.min(et, oet);
+                                    });
+                                })()}
+                            />
+                        ))}
+                        {scheduleData.length === 0 && (
+                            <div className="text-center py-16 text-zinc-500 bg-zinc-900/10 rounded-2xl border border-zinc-800/50 border-dashed m-1 flex flex-col items-center justify-center gap-2">
+                                <span className="text-sm font-medium">Free Slot Horizon</span>
+                                <span className="text-xs">No scheduled blocks for this day.</span>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
 
             {/* Critical Horizon - Sticky Bottom */}
             {
@@ -568,16 +629,18 @@ export default function CommandCenter() {
             }
 
             {/* Primary Action FAB */}
-            {viewMode === 'day' && (
-                <div className="fixed bottom-[100px] left-0 right-0 mx-auto max-w-md pointer-events-none z-50">
-                    <button
-                        onClick={() => { setEditingEvent(null); setIsModalOpen(true); }}
-                        className="absolute bottom-0 right-6 w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.3)] shadow-indigo-600/30 flex items-center justify-center transition-all active:scale-95 border border-indigo-500/50 pointer-events-auto"
-                    >
-                        <Plus className="w-6 h-6" />
-                    </button>
-                </div>
-            )}
+            {
+                viewMode === 'day' && (
+                    <div className="fixed bottom-[100px] left-0 right-0 mx-auto max-w-md pointer-events-none z-50 md:hidden">
+                        <button
+                            onClick={() => { setEditingEvent(null); setIsModalOpen(true); }}
+                            className="absolute bottom-0 right-6 w-14 h-14 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_20px_rgba(79,70,229,0.3)] shadow-indigo-600/30 flex items-center justify-center transition-all active:scale-95 border border-indigo-500/50 pointer-events-auto"
+                        >
+                            <Plus className="w-6 h-6" />
+                        </button>
+                    </div>
+                )
+            }
 
             <ActivityDetailsModal
                 isOpen={isDetailsModalOpen}

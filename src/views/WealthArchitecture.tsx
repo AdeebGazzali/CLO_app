@@ -1,4 +1,4 @@
-import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, Activity, LayoutDashboard, PlusCircle } from 'lucide-react';
+import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, Activity, LayoutDashboard, PlusCircle, Plus, X } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { formatDate } from '../lib/utils';
@@ -199,185 +199,225 @@ export default function WealthArchitecture() {
     if (loading) return <div className="text-zinc-500 text-center py-10 animate-pulse">Initializing Financial Engine...</div>;
 
     return (
-        <div className="pb-32 space-y-6 animate-in fade-in duration-500">
-
-            {/* Header / Wallet */}
-            <div className="flex items-end justify-between px-2">
-                <div>
-                    <h2 className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Operating Wallet</h2>
-                    <div className="text-4xl font-black text-white italic tracking-tighter">LKR {Number(stats.wallet_balance).toLocaleString()}</div>
-                    <div className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5"><AlertTriangle className="w-3 h-3 text-amber-500" /> 20k Floor Enforced</div>
-                </div>
-                <button onClick={() => setIsExpModalOpen(true)} className="px-4 py-2 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold hover:bg-rose-500/20 transition-all flex items-center gap-1.5">
-                    <Banknote className="w-4 h-4" /> Expense
-                </button>
-            </div>
-
-            {/* University Plans Master UI */}
-            <div className="rounded-2xl bg-zinc-900 border border-zinc-800 overflow-hidden shadow-2xl">
-                <div className="p-5 bg-gradient-to-br from-indigo-950/50 to-zinc-900 relative">
-                    <div className="flex justify-between items-start">
+        <div className="pb-32 px-2 md:px-0 animate-in fade-in duration-500">
+            {/* Top Metric Cards - Grid on md: */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
+                {/* 1. Operating Wallet */}
+                <div className="p-5 md:p-6 rounded-3xl bg-zinc-900 border border-zinc-800 shadow-xl flex flex-col justify-between items-start relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-3xl" />
+                    <div className="w-full flex justify-between items-start mb-6 relative z-10">
                         <div>
-                            <div className="flex items-center gap-2 mb-1">
-                                <Target className="w-4 h-4 text-indigo-400" />
-                                <h3 className="text-xs font-bold text-indigo-300 uppercase tracking-widest">University Fund</h3>
-                            </div>
-                            <div className="text-xl font-bold text-white mt-1">LKR {Number(stats.wealth_uni_fund).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+                            <h2 className="text-zinc-400 text-[10px] font-bold uppercase tracking-widest mb-1">Operating Wallet</h2>
+                            <div className="text-3xl font-black text-white italic tracking-tighter">LKR {Number(stats.wallet_balance).toLocaleString()}</div>
                         </div>
-                        <div className="flex gap-2">
-                            <button onClick={() => setIsAddFundModalOpen(true)} className="p-2 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 rounded-xl hover:bg-emerald-500/20 transition-all" title="Add External Funds / Past Deposits">
-                                <PlusCircle className="w-5 h-5" />
-                            </button>
-                            <button onClick={handlePayoutToFund} className="p-2 border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all" title="Transfer Operating Surplus">
-                                <ArrowRight className="w-5 h-5" />
-                            </button>
-                        </div>
+                        <button onClick={() => setIsExpModalOpen(true)} className="p-3 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-xl hover:bg-rose-500/20 transition-all shadow-lg shadow-rose-900/20">
+                            <Banknote className="w-5 h-5 md:w-6 md:h-6" />
+                        </button>
+                    </div>
+                    <div className="text-[10px] text-zinc-500 flex items-center gap-1.5 font-medium relative z-10">
+                        <AlertTriangle className="w-3 h-3 text-amber-500" /> 20k Floor Enforced
                     </div>
                 </div>
 
-                {/* Plan Toggle */}
-                <div className="p-4 border-t border-zinc-800/50">
-                    <div className="flex items-center justify-between mb-3 text-xs">
-                        <span className="font-bold text-zinc-400">Active Architecture</span>
-                        <span className="text-indigo-400 flex items-center gap-1 animate-pulse">
-                            GBP Live @ LKR {gbpRate.toFixed(2)}
-                        </span>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 mb-4">
-                        {['Plan 01', 'Plan 02', 'Plan 03'].map(plan => (
-                            <button
-                                key={plan}
-                                onClick={() => handleSwitchPlan(plan)}
-                                className={`py-2 px-1 rounded-lg text-xs font-bold transition-all flex flex-col items-center justify-center gap-1 border
-                                ${stats.active_uni_plan === plan ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'bg-zinc-800/50 border-zinc-700/50 text-zinc-500 hover:text-zinc-300'}`}
-                            >
-                                {plan}
-                                {recommendedPlan === plan && stats.active_uni_plan !== plan && <span className="text-[9px] text-emerald-400 block font-normal">Recommended</span>}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Plan Summary View */}
-                    <div className="mb-4 bg-black/40 rounded-xl overflow-hidden border border-zinc-800/50">
-                        <div className="px-3 py-2 bg-zinc-900 border-b border-zinc-800/50 text-[10px] uppercase font-bold text-zinc-500 tracking-widest flex justify-between">
-                            <span>Installment Breakdown</span>
-                            <span>Due Date</span>
+                {/* 2. Immediate Safe Cache */}
+                <div className="p-5 md:p-6 rounded-3xl border border-zinc-800 bg-zinc-900/40 shadow-xl flex flex-col justify-between">
+                    <div className="flex items-center gap-2 mb-4">
+                        <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center border border-emerald-500/20">
+                            <LayoutDashboard className="w-4 h-4 text-emerald-400" />
                         </div>
-                        <div className="divide-y divide-zinc-800/30 max-h-32 overflow-y-auto no-scrollbar">
-                            {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => (
-                                <div key={idx} className="px-3 py-2 flex justify-between items-center text-xs">
-                                    <span className="font-mono text-zinc-300">
-                                        {inst.amountGbp ? `£${inst.amountGbp.toLocaleString()} (LKR ${(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)` : ``}
-                                        {inst.amountLkr ? `LKR ${(inst.amountLkr / 1000).toLocaleString()}k` : ``}
-                                    </span>
-                                    <span className={`font-mono text-right ${inst.deadline < new Date() ? 'text-rose-500' : 'text-zinc-500'}`}>
-                                        {formatDate(inst.deadline)}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="bg-zinc-950/50 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs">
-                            <span className="text-zinc-400 font-bold">Total Architecture Cost</span>
-                            <span className="font-mono font-bold text-indigo-400">
-                                LKR {(UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0) || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </span>
-                        </div>
-                        <div className="bg-zinc-950/80 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs pb-4">
-                            <span className="text-zinc-400 font-bold">Remaining Capital Needed</span>
-                            <span className="font-mono font-black text-amber-500">
-                                LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="bg-black/30 rounded-xl p-4 border border-zinc-800/50 flex justify-between items-center">
-                        <div>
-                            <span className="text-[10px] text-zinc-500 block uppercase tracking-widest font-bold mb-1">Target Monthly Extraction</span>
-                            <span className="text-lg font-mono text-white">LKR {activeMonthlyGoal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <Activity className="w-6 h-6 text-zinc-700" />
-                    </div>
-                </div>
-            </div>
-
-            {/* Safe To Spend Engine */}
-            <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40">
-                    <div className="flex items-center gap-1.5 mb-2">
-                        <LayoutDashboard className="w-4 h-4 text-emerald-400" />
                         <h4 className="text-[10px] font-bold uppercase tracking-widest text-emerald-500">Immediate Safe Cache</h4>
                     </div>
-                    <span className="text-xl font-mono text-emerald-400 font-bold tracking-tight">LKR {actualPhysicalSafeToSpend.toLocaleString()}</span>
+                    <div>
+                        <span className="text-2xl md:text-3xl font-mono text-emerald-400 font-bold tracking-tight block truncate">LKR {actualPhysicalSafeToSpend.toLocaleString()}</span>
+                        <span className="text-[10px] text-zinc-500 mt-1 block">Surplus above emergency floor</span>
+                    </div>
                 </div>
 
-                <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 relative overflow-hidden">
-                    <div className="flex items-center gap-1.5 mb-2 relative z-10">
-                        <Activity className="w-4 h-4 text-amber-400" />
-                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Monthly Capability</h4>
+                {/* 3. Monthly Capability */}
+                <div className={`p-5 md:p-6 rounded-3xl border border-zinc-800 ${baseSafeToSpendMonthly < 0 ? 'bg-rose-950/20 border-rose-900/30' : 'bg-zinc-900/40'} shadow-xl flex flex-col justify-between relative overflow-hidden`}>
+                    <div className="flex items-center gap-2 mb-4 relative z-10">
+                        <div className={`w-8 h-8 rounded-lg ${baseSafeToSpendMonthly < 0 ? 'bg-rose-500/10 border-rose-500/20' : 'bg-amber-500/10 border-amber-500/20'} flex items-center justify-center border`}>
+                            <Activity className={`w-4 h-4 ${baseSafeToSpendMonthly < 0 ? 'text-rose-400' : 'text-amber-400'}`} />
+                        </div>
+                        <h4 className={`text-[10px] font-bold uppercase tracking-widest ${baseSafeToSpendMonthly < 0 ? 'text-rose-500' : 'text-amber-500'}`}>Monthly Capability</h4>
                     </div>
-                    <span className={`text-xl font-mono font-bold tracking-tight relative z-10 ${baseSafeToSpendMonthly < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                        {baseSafeToSpendMonthly < 0 ? '-' : ''}LKR {Math.abs(baseSafeToSpendMonthly).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
-                    </span>
+                    <div className="relative z-10">
+                        <span className={`text-2xl md:text-3xl font-mono font-bold tracking-tight block truncate ${baseSafeToSpendMonthly < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                            {baseSafeToSpendMonthly < 0 ? '-' : ''}LKR {Math.abs(baseSafeToSpendMonthly).toLocaleString(undefined, { maximumFractionDigits: 0 })}<span className="text-sm font-sans font-normal text-zinc-500">/mo</span>
+                        </span>
+                        <span className="text-[10px] text-zinc-500 mt-1 block">Expected safe-to-spend target</span>
+                    </div>
                     {baseSafeToSpendMonthly < 0 && (
                         <div className="absolute inset-0 bg-rose-500/5 z-0" />
                     )}
                 </div>
             </div>
 
+            {/* Negative Capability Warning */}
             {baseSafeToSpendMonthly < 0 && (
-                <p className="text-[10px] text-zinc-500 mt-2 px-1 text-center bg-rose-950/20 py-2 rounded-lg border border-rose-900/20">
-                    Monthly Capability is negative. You MUST generate <strong className="text-rose-400">LKR {Math.abs(baseSafeToSpendMonthly).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> in Variable Coaching Income this month to meet {stats.active_uni_plan} deadlines.
-                </p>
+                <div className="mb-8 p-4 bg-rose-950/20 rounded-2xl border border-rose-900/30 flex items-start md:items-center gap-3 shadow-lg shadow-rose-900/10">
+                    <AlertTriangle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5 md:mt-0" />
+                    <p className="text-xs md:text-sm text-zinc-300">
+                        Monthly Capability is negative. You MUST generate <strong className="text-rose-400">LKR {Math.abs(baseSafeToSpendMonthly).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> in Variable Coaching Income this month to meet {stats.active_uni_plan} deadlines.
+                    </p>
+                </div>
             )}
 
-            {/* Priority Expense Engine */}
-            <div className="mt-8">
-                <div className="flex items-center justify-between mb-4 px-1">
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Priority Forecasting
-                    </h3>
-                    <button onClick={() => setIsPriorityModalOpen(true)} className="text-xs text-indigo-400 font-bold flex items-center gap-1 hover:text-indigo-300 transition-colors">
-                        <ListPlus className="w-4 h-4" /> Add Goal
-                    </button>
-                </div>
+            {/* Desktop Split View for Main Content */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-                <div className="space-y-3">
-                    {priorityExpenses.map((expense) => {
-                        // Dynamic forecasting logic simulation based on surplus SafeToSpend per month
-                        const monthsNeeded = baseSafeToSpendMonthly > 0 ? (expense.amount / baseSafeToSpendMonthly) : Infinity;
-                        const projectedDate = new Date();
-                        if (monthsNeeded !== Infinity) projectedDate.setMonth(projectedDate.getMonth() + monthsNeeded);
-
-                        const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || baseSafeToSpendMonthly <= 0;
-
-                        return (
-                            <div key={expense.id} className="p-4 rounded-xl border border-zinc-800 bg-zinc-900 shadow-lg">
-                                <div className="flex justify-between items-start mb-3">
-                                    <div>
-                                        <h4 className="font-bold text-zinc-100">{expense.title}</h4>
-                                        <span className="text-sm font-mono text-zinc-400">LKR {expense.amount.toLocaleString()}</span>
+                {/* Left Column: University Plans */}
+                <div className="col-span-1 lg:col-span-7 xl:col-span-8 space-y-6">
+                    {/* University Plans Master UI */}
+                    <div className="rounded-3xl bg-zinc-900 border border-zinc-800 overflow-hidden shadow-2xl">
+                        <div className="p-5 md:p-8 bg-gradient-to-br from-indigo-950/50 to-zinc-900 relative">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                        <Target className="w-5 h-5 text-indigo-400" />
+                                        <h3 className="text-xs font-bold text-indigo-300 uppercase tracking-widest">University Fund</h3>
                                     </div>
-                                    <div className="text-right">
-                                        <span className="text-[10px] text-zinc-500 uppercase tracking-widest block font-bold">Target</span>
-                                        <span className="text-xs text-zinc-300 font-medium">{formatDate(new Date(expense.target_date))}</span>
-                                    </div>
+                                    <div className="text-2xl md:text-4xl font-black text-white mt-2 tracking-tighter">LKR {Number(stats.wealth_uni_fund).toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                                 </div>
-                                <div className={`p-2 rounded-lg border text-xs flex items-start gap-2 ${isAtRisk ? 'bg-rose-950/30 border-rose-900/50 text-rose-300' : 'bg-emerald-950/30 border-emerald-900/50 text-emerald-300'}`}>
-                                    {isAtRisk ? <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" /> : <TrendingUp className="w-4 h-4 shrink-0 mt-0.5" />}
-                                    <div>
-                                        <strong className="block mb-0.5">{isAtRisk ? 'High Risk' : 'On Track'}</strong>
-                                        {isAtRisk ? "Insufficient monthly cache to reach target. Prevented by strict Uni Plan allocation." : `Projected completion: ${projectedDate.toLocaleString('default', { month: 'short', year: 'numeric' })}`}
-                                    </div>
+                                <div className="flex gap-2">
+                                    <button onClick={() => setIsAddFundModalOpen(true)} className="p-2.5 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 rounded-xl hover:bg-emerald-500/20 transition-all shadow-lg" title="Add External Funds / Past Deposits">
+                                        <PlusCircle className="w-5 h-5 md:w-6 md:h-6" />
+                                    </button>
+                                    <button onClick={handlePayoutToFund} className="p-2.5 border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all shadow-lg" title="Transfer Operating Surplus">
+                                        <ArrowRight className="w-5 h-5 md:w-6 md:h-6" />
+                                    </button>
                                 </div>
                             </div>
-                        )
-                    })}
-                    {priorityExpenses.length === 0 && (
-                        <div className="text-center py-6 border border-dashed border-zinc-800 rounded-xl text-zinc-500 text-xs">
-                            No priority expenses tracked.
                         </div>
-                    )}
+
+                        {/* Plan Toggle */}
+                        <div className="p-4 md:p-6 border-t border-zinc-800/50">
+                            <div className="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-2">
+                                <span className="text-sm font-bold text-zinc-300">Active Architecture</span>
+                                <span className="text-xs text-indigo-400 flex items-center gap-1.5 font-mono bg-indigo-500/10 px-3 py-1.5 rounded-full border border-indigo-500/20">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+                                    GBP Live @ LKR {gbpRate.toFixed(2)}
+                                </span>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-2 md:gap-4 mb-6">
+                                {['Plan 01', 'Plan 02', 'Plan 03'].map(plan => (
+                                    <button
+                                        key={plan}
+                                        onClick={() => handleSwitchPlan(plan)}
+                                        className={`py-3 px-2 rounded-xl text-xs md:text-sm font-bold transition-all flex flex-col items-center justify-center gap-1 border
+                                        ${stats.active_uni_plan === plan ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/30' : 'bg-zinc-800/50 border-zinc-700/50 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'}`}
+                                    >
+                                        {plan}
+                                        {recommendedPlan === plan && stats.active_uni_plan !== plan && <span className="text-[9px] md:text-[10px] text-emerald-400 block font-medium">Recommended</span>}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Plan Summary View */}
+                            <div className="mb-6 bg-black/40 rounded-2xl overflow-hidden border border-zinc-800/50 shadow-inner">
+                                <div className="px-4 py-3 bg-zinc-900 border-b border-zinc-800/50 text-[10px] md:text-xs uppercase font-bold text-zinc-500 tracking-widest flex justify-between">
+                                    <span>Installment Breakdown</span>
+                                    <span>Due Date</span>
+                                </div>
+                                <div className="divide-y divide-zinc-800/30 max-h-48 overflow-y-auto custom-scrollbar">
+                                    {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => (
+                                        <div key={idx} className="px-4 py-3 flex justify-between items-center text-xs md:text-sm hover:bg-zinc-900/30 transition-colors">
+                                            <span className="font-mono text-zinc-300 flex flex-col md:flex-row md:gap-2">
+                                                {inst.amountGbp ? <span>£{inst.amountGbp.toLocaleString()} <span className="text-zinc-500 md:hidden"><br />(LKR {(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)</span><span className="hidden md:inline text-zinc-500">(LKR {(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)</span></span> : null}
+                                                {inst.amountLkr ? <span>LKR {(inst.amountLkr / 1000).toLocaleString()}k</span> : null}
+                                            </span>
+                                            <span className={`font-mono text-right ${inst.deadline < new Date() ? 'text-rose-500 font-bold' : 'text-zinc-400'}`}>
+                                                {formatDate(inst.deadline)}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="bg-zinc-950/80 p-4 flex justify-between items-center border-t border-zinc-800/50 text-xs md:text-sm">
+                                    <span className="text-zinc-400 font-bold">Total Architecture Cost</span>
+                                    <span className="font-mono font-bold text-indigo-400 text-sm md:text-base">
+                                        LKR {(UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0) || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    </span>
+                                </div>
+                                <div className="bg-[#050505] p-4 flex justify-between items-center border-t border-zinc-900 text-xs md:text-sm">
+                                    <span className="text-zinc-400 font-bold">Remaining Capital Needed</span>
+                                    <span className="font-mono font-black text-amber-500 text-sm md:text-base">
+                                        LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className="bg-indigo-500/5 rounded-2xl p-5 border border-indigo-500/10 flex justify-between items-center">
+                                <div>
+                                    <span className="text-[10px] md:text-xs text-indigo-300 block uppercase tracking-widest font-bold mb-1">Target Monthly Extraction</span>
+                                    <span className="text-xl md:text-2xl font-mono text-white font-black">LKR {activeMonthlyGoal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                </div>
+                                <Activity className="w-8 h-8 text-indigo-500/30" />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Right Column: Priority Expenses */}
+                <div className="col-span-1 lg:col-span-5 xl:col-span-4 mt-8 md:mt-0">
+                    <div className="flex items-center justify-between mb-4 px-1">
+                        <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Priority Forecasting
+                        </h3>
+                        <button onClick={() => setIsPriorityModalOpen(true)} className="px-3 py-1.5 md:hidden bg-zinc-900 border border-zinc-800 rounded-lg text-xs text-indigo-400 font-bold flex items-center gap-1.5 hover:bg-zinc-800 transition-colors shadow-sm">
+                            <ListPlus className="w-3.5 h-3.5" /> Add
+                        </button>
+                    </div>
+
+                    <div className="space-y-4">
+                        {priorityExpenses.map((expense) => {
+                            // Dynamic forecasting logic simulation based on surplus SafeToSpend per month
+                            const monthsNeeded = baseSafeToSpendMonthly > 0 ? (expense.amount / baseSafeToSpendMonthly) : Infinity;
+                            const projectedDate = new Date();
+                            if (monthsNeeded !== Infinity) projectedDate.setMonth(projectedDate.getMonth() + monthsNeeded);
+
+                            const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || baseSafeToSpendMonthly <= 0;
+
+                            return (
+                                <div key={expense.id} className="p-5 rounded-3xl border border-zinc-800 bg-zinc-900 shadow-xl relative overflow-hidden group">
+                                    <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/20 pointer-events-none" />
+                                    <div className="flex flex-col gap-4 relative z-10">
+                                        <div className="flex justify-between items-start">
+                                            <div>
+                                                <h4 className="font-bold text-zinc-100 text-lg mb-1">{expense.title}</h4>
+                                                <span className="text-sm font-mono font-bold text-zinc-400 bg-black/30 px-2 py-0.5 rounded-md border border-zinc-800/80">LKR {expense.amount.toLocaleString()}</span>
+                                            </div>
+                                            <div className="text-right flex flex-col items-end">
+                                                <span className="text-[10px] text-zinc-500 uppercase tracking-widest block font-bold mb-0.5">Target</span>
+                                                <span className="text-xs text-zinc-300 font-medium bg-zinc-800/50 px-2 py-1 rounded-md">{formatDate(new Date(expense.target_date))}</span>
+                                            </div>
+                                        </div>
+
+                                        <div className={`p-3 rounded-xl border text-xs flex items-center gap-3 ${isAtRisk ? 'bg-rose-950/20 border-rose-900/40 text-rose-300' : 'bg-emerald-950/20 border-emerald-900/40 text-emerald-300'}`}>
+                                            <div className={`p-2 rounded-lg shrink-0 ${isAtRisk ? 'bg-rose-500/10' : 'bg-emerald-500/10'}`}>
+                                                {isAtRisk ? <AlertTriangle className="w-4 h-4" /> : <TrendingUp className="w-4 h-4" />}
+                                            </div>
+                                            <div>
+                                                <strong className="block mb-0.5 font-bold">{isAtRisk ? 'High Risk' : 'On Track'}</strong>
+                                                <span className="opacity-80 block leading-tight">{isAtRisk ? "Insufficient monthly cache to reach target. Prevented by strict Uni Plan allocation." : `Projected completion: ${projectedDate.toLocaleString('default', { month: 'short', year: 'numeric' })}`}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })}
+                        {priorityExpenses.length === 0 && (
+                            <div className="text-center py-10 border border-dashed border-zinc-800 bg-zinc-900/20 rounded-3xl text-zinc-500 text-sm font-medium flex flex-col items-center gap-2">
+                                <ListPlus className="w-8 h-8 opacity-20 mb-2" />
+                                No priority expenses tracked.
+                                <span className="text-xs opacity-70">Add a goal to forecast capability.</span>
+                            </div>
+                        )}
+
+                        <button onClick={() => setIsPriorityModalOpen(true)} className="w-full hidden md:flex py-4 mt-2 bg-zinc-900 hover:bg-zinc-800 border-2 border-dashed border-zinc-800 hover:border-indigo-500/50 text-indigo-400 rounded-3xl items-center justify-center transition-all active:scale-95 text-sm font-bold gap-2">
+                            <Plus className="w-5 h-5" /> Add Priority Goal
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -467,7 +507,7 @@ export default function WealthArchitecture() {
                 )}
             </AnimatePresence>
 
-        </div>
+        </div >
     )
 }
 
@@ -479,7 +519,12 @@ function GenericModal({ children, title, onClose }: any) {
                 className="w-full sm:max-w-md bg-zinc-950 border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative"
             >
                 <div className="w-12 h-1.5 bg-zinc-800 rounded-full mx-auto mb-6 cursor-pointer" onClick={onClose} />
-                <h2 className="text-xl font-bold text-white mb-6">{title}</h2>
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-bold text-white">{title}</h2>
+                    <button onClick={onClose} className="p-2 bg-zinc-900 border border-zinc-800 rounded-full text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors shadow-sm">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
                 {children}
             </motion.div>
         </div>
