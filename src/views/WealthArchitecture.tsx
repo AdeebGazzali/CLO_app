@@ -163,8 +163,7 @@ export default function WealthArchitecture() {
     const baseSafeToSpendMonthly = Number(stats.wallet_salary) - activeMonthlyGoal - recurringExpensesTotal;
 
     // Total physical Safe Buffer
-    const EMERGENCY_FLOOR = 20000;
-    const actualPhysicalSafeToSpend = Math.max(0, Number(stats.wallet_balance) - EMERGENCY_FLOOR);
+    const actualPhysicalSafeToSpend = Math.max(0, Number(stats.wallet_balance));
 
     // Smart Recommendation logic
     const projectedCapacity = Number(stats.wallet_salary) + recentVariableIncome - recurringExpensesTotal;
@@ -180,17 +179,17 @@ export default function WealthArchitecture() {
     };
 
     const handlePayoutToFund = async () => {
-        const amountToTransfer = Number(stats.wallet_balance) - EMERGENCY_FLOOR;
+        const amountToTransfer = Number(stats.wallet_balance);
         if (amountToTransfer <= 0) {
-            alert("No funds available above the 20k emergency floor!");
+            alert("No funds available to transfer!");
             return;
         }
 
         const newUniFund = Number(stats.wealth_uni_fund) + amountToTransfer;
-        setStats(prev => ({ ...prev, wallet_balance: EMERGENCY_FLOOR, wealth_uni_fund: newUniFund }));
+        setStats(prev => ({ ...prev, wallet_balance: 0, wealth_uni_fund: newUniFund }));
 
         const { data: { user } } = await supabase.auth.getUser();
-        await supabase.from('user_stats').update({ wallet_balance: EMERGENCY_FLOOR, wealth_uni_fund: newUniFund }).eq('user_id', user?.id);
+        await supabase.from('user_stats').update({ wallet_balance: 0, wealth_uni_fund: newUniFund }).eq('user_id', user?.id);
         await supabase.from('wallet_history').insert({
             user_id: user?.id, date: formatDate(new Date()), amount: -amountToTransfer, description: 'Uni Fund Contribution', type: 'OUT'
         });
@@ -391,9 +390,6 @@ export default function WealthArchitecture() {
                                 if (!user) return;
 
                                 const finalBal = Number(stats.wallet_balance) - amount;
-                                if (finalBal < EMERGENCY_FLOOR && !window.confirm(`Warning: This bridges into your LKR 20,000 emergency floor! You will have LKR ${finalBal.toLocaleString()} left. Proceed?`)) {
-                                    return;
-                                }
 
                                 await supabase.from('expenses').insert({ user_id: user.id, amount, reason, date: formatDate(new Date()) });
                                 await supabase.from('user_stats').update({ wallet_balance: finalBal }).eq('user_id', user.id);
