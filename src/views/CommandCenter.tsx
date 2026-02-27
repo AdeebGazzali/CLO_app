@@ -26,6 +26,7 @@ export default function CommandCenter() {
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'day' | 'month'>('month');
     const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
+    const [holidays, setHolidays] = useState<any[]>([]);
 
     // Modal State
     const [isModalOpen, setIsModalOpen] = useState(false);
@@ -87,6 +88,15 @@ export default function CommandCenter() {
         const handleReset = () => setViewMode('month');
         window.addEventListener('resetCalendarView', handleReset);
         return () => window.removeEventListener('resetCalendarView', handleReset);
+    }, []);
+
+    // Fetch Sri Lanka Holidays
+    useEffect(() => {
+        const year = new Date().getFullYear();
+        fetch(`https://raw.githubusercontent.com/Dilshan-H/srilanka-holidays/main/json/${year}.json`)
+            .then(res => res.json())
+            .then(data => setHolidays(data || []))
+            .catch(() => setHolidays([]));
     }, []);
 
     const handleCheckBlock = async (block: any) => {
@@ -454,6 +464,7 @@ export default function CommandCenter() {
                                 <CalendarGrid
                                     currentDate={currentDate}
                                     monthData={monthData}
+                                    holidays={holidays}
                                     onDateClick={(date) => { setCurrentDate(date); }}
                                 />
 
@@ -472,15 +483,36 @@ export default function CommandCenter() {
                                     </div>
 
                                     <div className="space-y-2">
-                                        {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
-                                            scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
+                                        {(() => {
+                                            const todayStr = formatDate(currentDate);
+                                            const todayHolidays = holidays
+                                                .filter((h: any) => h.start === todayStr && (h.categories?.includes('Mercantile') || h.categories?.includes('Poya')))
+                                                .map((h: any) => ({ id: `holiday-${h.uid}`, activity: h.summary, type: 'HOLIDAY', is_priority: true, time_range: 'Anytime', completed: false, meta: {} }));
+                                            const focusItems = [...todayHolidays, ...scheduleData.filter(b => b.is_priority || b.type === 'FITNESS')];
+                                            if (focusItems.length === 0) {
+                                                return (
+                                                    <div
+                                                        onClick={(e) => { e.stopPropagation(); setEditingEvent(null); setIsModalOpen(true); }}
+                                                        className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
+                                                    >
+                                                        <span className="text-xs text-zinc-600 font-medium">
+                                                            {scheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
+                                                        </span>
+                                                        <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
+                                                            <Plus className="w-3.5 h-3.5" /> Quick Add
+                                                        </button>
+                                                    </div>
+                                                );
+                                            }
+                                            return focusItems.slice(0, 4).map((block) => (
                                                 <div key={block.id + '-mini'} onClick={() => setViewMode('day')} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800/30 bg-zinc-900/30 cursor-pointer hover:bg-zinc-800/50 transition-colors">
                                                     <div className={`w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0 shadow-inner ${block.type === 'FITNESS'
                                                         ? block.activity.toUpperCase().includes('SWIM') ? 'text-cyan-400'
                                                             : block.activity.toUpperCase().includes('CYCLE') ? 'text-orange-400'
                                                                 : block.activity.toUpperCase().includes('GYM') ? 'text-indigo-400'
                                                                     : 'text-emerald-400'
-                                                        : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
+                                                        : block.type === 'HOLIDAY' ? 'text-pink-400'
+                                                            : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
                                                         }`}>
                                                         {block.type === 'FITNESS' ? (
                                                             block.activity.toUpperCase().includes('SWIM') ? <Waves className="w-4 h-4" /> :
@@ -508,26 +540,8 @@ export default function CommandCenter() {
                                                         )}
                                                     </div>
                                                 </div>
-                                            ))
-                                        ) : (
-                                            <div
-                                                onClick={(e) => { e.stopPropagation(); setEditingEvent(null); setIsModalOpen(true); }}
-                                                className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
-                                            >
-                                                <span className="text-xs text-zinc-600 font-medium">
-                                                    {scheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
-                                                </span>
-                                                <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
-                                                    <Plus className="w-3.5 h-3.5" /> Quick Add
-                                                </button>
-                                            </div>
-                                        )}
-                                        {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 &&
-                                            scheduleData.length > Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3) ? (
-                                            <div onClick={() => setViewMode('day')} className="text-center text-xs text-zinc-500 pt-1 font-medium cursor-pointer hover:text-indigo-400 transition-colors">
-                                                +{scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)} more scheduled block{(scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)) > 1 ? 's' : ''}
-                                            </div>
-                                        ) : null}
+                                            ));
+                                        })()}
                                     </div>
                                 </div>
 
@@ -596,36 +610,38 @@ export default function CommandCenter() {
         );
     }
 
-    function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Date, monthData: any[], onDateClick: (d: Date) => void }) {
+    function CalendarGrid({ currentDate, monthData, holidays, onDateClick }: { currentDate: Date, monthData: any[], holidays: any[], onDateClick: (d: Date) => void }) {
         const daysInMonth = getDaysInMonth(currentDate);
-        const firstDay = getFirstDayOfMonth(currentDate);
-        const today = new Date(); // Actual today
+        const rawFirstDay = getFirstDayOfMonth(currentDate);
+        const firstDay = rawFirstDay === 0 ? 6 : rawFirstDay - 1;
+        const today = new Date();
         const currentMonth = currentDate.getMonth();
         const currentYear = currentDate.getFullYear();
 
         const days = [];
-        // Empty slots for offset
         for (let i = 0; i < firstDay; i++) {
             days.push(<div key={`empty-${i}`} className="h-14"></div>);
         }
 
         for (let d = 1; d <= daysInMonth; d++) {
             const dateObj = new Date(currentYear, currentMonth, d);
-
-            // Indicators 
             const dateStr = formatDate(dateObj);
+            const dayOfWeek = dateObj.getDay();
 
-            // Critical Deadlines Check
             const isCritical = monthData.some(e => e.date === dateStr && e.is_goal);
-
-            // Date matching without timezone offset drift
             const isToday = dateObj.toLocaleDateString() === today.toLocaleDateString();
             const isSelected = dateObj.toLocaleDateString() === currentDate.toLocaleDateString();
 
-            // Indicators
             const dayEvents = monthData.filter(e => e.date === dateStr);
             const hasRun = dayEvents.some(e => e.type === 'FITNESS');
             const hasCoaching = dayEvents.some(e => e.type === 'COACHING');
+
+            // Holiday logic
+            const dayHolidays = holidays.filter((h: any) => h.start === dateStr);
+            const hasHoliday = dayHolidays.length > 0;
+            const isPriorityHoliday = dayHolidays.some((h: any) => h.categories?.includes('Mercantile') || h.categories?.includes('Poya'));
+            const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+            const isFaintBg = isWeekend || isPriorityHoliday;
 
             days.push(
                 <button
@@ -635,9 +651,10 @@ export default function CommandCenter() {
                 ${isCritical ? 'bg-rose-900/20 border-rose-500/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]' :
                             isToday ? 'bg-indigo-600/20 border-indigo-500' :
                                 isSelected ? 'bg-zinc-800 border-zinc-600' :
-                                    'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'}`}
+                                    isFaintBg ? 'bg-zinc-800/40 border-zinc-700/50' :
+                                        'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'}`}
                 >
-                    <span className={`text-sm font-medium ${isCritical ? 'text-rose-400 font-bold' : isToday ? 'text-indigo-400' : isSelected ? 'text-white' : 'text-zinc-400'}`}>
+                    <span className={`text-sm font-medium ${isCritical ? 'text-rose-400 font-bold' : isToday ? 'text-indigo-400' : isSelected ? 'text-white' : isFaintBg ? 'text-zinc-500' : 'text-zinc-400'}`}>
                         {d}
                     </span>
 
@@ -652,6 +669,9 @@ export default function CommandCenter() {
                         {hasCoaching && (
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                         )}
+                        {hasHoliday && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
+                        )}
                     </div>
                 </button>
             );
@@ -659,8 +679,8 @@ export default function CommandCenter() {
 
         return (
             <div className="grid grid-cols-7 gap-2 px-2">
-                {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
-                    <div key={day} className="text-center text-xs font-bold text-zinc-600 mb-2">{day}</div>
+                {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, i) => (
+                    <div key={`${day}-${i}`} className={`text-center text-xs font-bold mb-2 ${i >= 5 ? 'text-zinc-600' : 'text-zinc-500'}`}>{day}</div>
                 ))}
                 {days}
             </div>
