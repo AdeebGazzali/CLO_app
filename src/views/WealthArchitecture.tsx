@@ -175,7 +175,7 @@ export default function WealthArchitecture() {
 
         const unpaidInstallments = installments.filter(i => i.deadline >= nextMilestoneDate);
 
-        if (unpaidInstallments.length === 0) return 0; // Plan completed
+        if (unpaidInstallments.length === 0) return { baseline: 0, dynamic: 0 }; // Plan completed
 
         let totalRemainingCost = 0;
         for (const inst of unpaidInstallments) {
@@ -195,11 +195,17 @@ export default function WealthArchitecture() {
         // Baseline Requirement is total architectural cost spread across the true remaining time frame
         const baselineRequirement = totalRemainingCost / totalMonthsRemaining;
 
-        return baselineRequirement;
+        // Dynamic Requirement accounts for what is already physically saved in the Uni Fund
+        const netDeficit = Math.max(0, totalRemainingCost - Number(stats.wealth_uni_fund));
+        const dynamicRequirement = netDeficit / totalMonthsRemaining;
+
+        return { baseline: baselineRequirement, dynamic: dynamicRequirement };
     };
 
     // Derived States
-    const activeMonthlyRequirement = calculateDynamicWaterfallRequirement(stats.active_uni_plan);
+    const activeRequirementMetrics = calculateDynamicWaterfallRequirement(stats.active_uni_plan);
+    const activeMonthlyRequirement = activeRequirementMetrics.baseline;
+    const activeDynamicRequirement = activeRequirementMetrics.dynamic;
 
     // Total Liquid Assets (Physical Cash)
     const totalLiquidAssets = Math.max(0, Number(stats.wallet_balance)) + Math.max(0, Number(stats.wealth_uni_fund));
@@ -211,8 +217,8 @@ export default function WealthArchitecture() {
     let recommendedPlan = 'Plan 03';
     // Assume basic income capacity is wallet salary + average coaching just for recommendations
     const projectedRecommendationCapacity = Number(stats.wallet_salary) + recentVariableIncome - recurringExpensesTotal;
-    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 02') + 10000) recommendedPlan = 'Plan 02';
-    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 01') + 10000) recommendedPlan = 'Plan 01';
+    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 02').baseline + 10000) recommendedPlan = 'Plan 02';
+    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 01').baseline + 10000) recommendedPlan = 'Plan 01';
 
     // Handlers
     const handleSwitchPlan = async (plan: string) => {
@@ -335,7 +341,10 @@ export default function WealthArchitecture() {
                     <div className="bg-black/30 rounded-xl p-4 border border-zinc-800/50 flex justify-between items-center">
                         <div>
                             <span className="text-[10px] text-zinc-500 block uppercase tracking-widest font-bold mb-1">Baseline Requirement (Next 25th)</span>
-                            <span className="text-lg font-mono text-white">LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            <span className="text-lg font-mono text-white">
+                                LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                <span className="text-[11px] font-mono text-zinc-500 ml-2 font-normal">(LKR {activeDynamicRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })} dynamic)</span>
+                            </span>
                         </div>
                         <Activity className="w-6 h-6 text-zinc-700" />
                     </div>
