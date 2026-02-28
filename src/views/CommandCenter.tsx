@@ -10,10 +10,11 @@ import {
     Dumbbell,
     Users as UsersIcon
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, PanInfo, AnimatePresence } from 'framer-motion';
 import { supabase } from '../lib/supabaseClient';
-import { getDayName, formatDate, getColorForType, getDaysInMonth, getFirstDayOfMonth, generateRecurrencePayloads } from '../lib/utils';
+import { getDayName, formatDate, getColorForType, getDaysInMonth, getFirstDayOfMonth, generateRecurrencePayloads, mergeScheduleWithHolidays } from '../lib/utils';
+import { useSriLankaHolidays } from '../hooks/useSriLankaHolidays';
 import AddEventWizard from '../components/AddEventWizard';
 import ActivityDetailsModal from '../components/ActivityDetailsModal';
 
@@ -38,6 +39,9 @@ export default function CommandCenter() {
     const [isRunModalOpen, setIsRunModalOpen] = useState(false);
     const [activeRunBlock, setActiveRunBlock] = useState<any>(null);
 
+    // Holidays Data
+    const { holidays } = useSriLankaHolidays(currentDate);
+
     const fetchSchedule = async () => {
         setLoading(true);
         const dateStr = formatDate(currentDate);
@@ -56,8 +60,8 @@ export default function CommandCenter() {
         if (dayError) console.error('Error fetching day schedule:', dayError);
 
         // 2. Fetch Month Data for Indicators
-        const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0];
-        const endOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
+        const startOfMonth = formatDate(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
+        const endOfMonth = formatDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
 
         const { data: monthData, error: monthError } = await supabase
             .from('events')
@@ -70,14 +74,18 @@ export default function CommandCenter() {
 
         setMonthData(monthData || []);
 
-        // 3. Hydrate View
-        setScheduleData((dayData || []).sort((a, b) => {
+        setScheduleData(dayData || []);
+        setLoading(false);
+    };
+
+    const mergedScheduleData = React.useMemo(() => {
+        const sorted = [...scheduleData].sort((a, b) => {
             if (a.time_range === 'Anytime') return 1;
             if (b.time_range === 'Anytime') return -1;
             return a.time_range.localeCompare(b.time_range);
-        }));
-        setLoading(false);
-    };
+        });
+        return mergeScheduleWithHolidays(sorted, holidays, formatDate(currentDate));
+    }, [scheduleData, holidays, currentDate]);
 
     useEffect(() => {
         fetchSchedule();
@@ -405,7 +413,7 @@ export default function CommandCenter() {
                             style={{ willChange: 'transform, opacity', touchAction: 'pan-y' }}
                             className={`space-y-3 px-1 w-full min-h-[60vh] ${loading ? 'opacity-50 pointer-events-none' : ''}`}
                         >
-                            {scheduleData.map((block) => (
+                            {mergedScheduleData.map((block) => (
                                 <ActivityBlock
                                     key={block.id}
                                     block={block}
@@ -427,7 +435,7 @@ export default function CommandCenter() {
                                     })()}
                                 />
                             ))}
-                            {scheduleData.length === 0 && (
+                            {mergedScheduleData.length === 0 && (
                                 <div className="text-center py-10 text-zinc-500">No scheduled blocks.</div>
                             )}
                         </motion.div>
@@ -455,6 +463,7 @@ export default function CommandCenter() {
                             <CalendarGrid
                                 currentDate={currentDate}
                                 monthData={monthData}
+                                holidaysData={holidays}
                                 onDateClick={(date) => { setCurrentDate(date); }}
                             />
 
@@ -473,8 +482,8 @@ export default function CommandCenter() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
-                                        scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
+                                    {mergedScheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
+                                        mergedScheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
                                             <div key={block.id + '-mini'} onClick={() => setViewMode('day')} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800/30 bg-zinc-900/30 cursor-pointer hover:bg-zinc-800/50 transition-colors">
                                                 <div className={`w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0 shadow-inner ${block.type === 'FITNESS'
                                                     ? block.activity.toUpperCase().includes('SWIM') ? 'text-cyan-400'
@@ -489,7 +498,8 @@ export default function CommandCenter() {
                                                                 block.activity.toUpperCase().includes('GYM') ? <Dumbbell className="w-4 h-4" /> :
                                                                     <Footprints className="w-4 h-4" />
                                                     ) : block.type === 'COACHING' ? <UsersIcon className="w-4 h-4" />
-                                                        : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
+                                                        : block.type === 'HOLIDAY' ? <span className="text-sm">🌴</span>
+                                                            : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
                                                     }
                                                 </div>
                                                 <div className="flex-[0.3] min-w-[50px]">
@@ -516,7 +526,7 @@ export default function CommandCenter() {
                                             className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
                                         >
                                             <span className="text-xs text-zinc-600 font-medium">
-                                                {scheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
+                                                {mergedScheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
                                             </span>
                                             <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
                                                 <Plus className="w-3.5 h-3.5" /> Quick Add
@@ -597,7 +607,7 @@ export default function CommandCenter() {
     );
 }
 
-function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Date, monthData: any[], onDateClick: (d: Date) => void }) {
+function CalendarGrid({ currentDate, monthData, holidaysData, onDateClick }: { currentDate: Date, monthData: any[], holidaysData: any[], onDateClick: (d: Date) => void }) {
     const daysInMonth = getDaysInMonth(currentDate);
     const firstDay = getFirstDayOfMonth(currentDate);
     const today = new Date(); // Actual today
@@ -623,6 +633,26 @@ function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Da
         const isToday = dateObj.toLocaleDateString() === today.toLocaleDateString();
         const isSelected = dateObj.toLocaleDateString() === currentDate.toLocaleDateString();
 
+        // Weekend Check (Saturday or Sunday)
+        const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+
+        // Holiday Check
+        const dayHolidays = holidaysData.filter(h => h.start === dateStr);
+        const hasHoliday = dayHolidays.length > 0;
+        const isMercantileOrPoya = dayHolidays.some(h => h.categories.includes('Mercantile') || h.categories.includes('Poya'));
+
+        // Background Styling
+        let bgStyle = 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800';
+        if (isCritical) {
+            bgStyle = 'bg-rose-900/20 border-rose-500/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]';
+        } else if (isToday) {
+            bgStyle = 'bg-indigo-600/20 border-indigo-500';
+        } else if (isSelected) {
+            bgStyle = 'bg-zinc-800 border-zinc-600';
+        } else if (isWeekend || isMercantileOrPoya) {
+            bgStyle = 'bg-indigo-900/20 border-zinc-800/80 hover:bg-indigo-900/30';
+        }
+
         // Indicators
         const dayEvents = monthData.filter(e => e.date === dateStr);
         const hasRun = dayEvents.some(e => e.type === 'FITNESS');
@@ -632,11 +662,7 @@ function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Da
             <button
                 key={d}
                 onClick={() => onDateClick(dateObj)}
-                className={`h-14 rounded-lg relative flex flex-col items-center justify-start pt-1 transition-all border
-                ${isCritical ? 'bg-rose-900/20 border-rose-500/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]' :
-                        isToday ? 'bg-indigo-600/20 border-indigo-500' :
-                            isSelected ? 'bg-zinc-800 border-zinc-600' :
-                                'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'}`}
+                className={`h-14 rounded-lg relative flex flex-col items-center justify-start pt-1 transition-all border ${bgStyle}`}
             >
                 <span className={`text-sm font-medium ${isCritical ? 'text-rose-400 font-bold' : isToday ? 'text-indigo-400' : isSelected ? 'text-white' : 'text-zinc-400'}`}>
                     {d}
@@ -646,6 +672,9 @@ function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Da
                 <div className="flex gap-1 mt-1">
                     {isCritical && (
                         <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse shadow-[0_0_5px_rose]" />
+                    )}
+                    {hasHoliday && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-fuchsia-500" title="Public Holiday" />
                     )}
                     {hasRun && (
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
@@ -660,8 +689,8 @@ function CalendarGrid({ currentDate, monthData, onDateClick }: { currentDate: Da
 
     return (
         <div className="grid grid-cols-7 gap-2 px-2">
-            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(day => (
-                <div key={day} className="text-center text-xs font-bold text-zinc-600 mb-2">{day}</div>
+            {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, idx) => (
+                <div key={day + idx} className="text-center text-xs font-bold text-zinc-600 mb-2">{day}</div>
             ))}
             {days}
         </div>
@@ -684,6 +713,8 @@ function ActivityBlock({ block, onCheck, onClick, isOverlapping = false }: { blo
         leftBorderColor = 'border-l-blue-500';
     } else if (block.type === 'RELIGION') {
         leftBorderColor = 'border-l-purple-500';
+    } else if (block.type === 'HOLIDAY') {
+        leftBorderColor = 'border-l-fuchsia-500';
     }
 
     return (
@@ -706,7 +737,8 @@ function ActivityBlock({ block, onCheck, onClick, isOverlapping = false }: { blo
                             block.activity.toUpperCase().includes('GYM') ? <Dumbbell className="w-5 h-5" /> :
                                 <Footprints className="w-5 h-5" />
                 ) : block.type === 'COACHING' ? <UsersIcon className="w-5 h-5" />
-                    : <div className="w-3 h-3 rounded-full bg-current opacity-50" />
+                    : block.type === 'HOLIDAY' ? <span className="text-xl">🌴</span>
+                        : <div className="w-3 h-3 rounded-full bg-current opacity-50" />
                 }
             </div>
 

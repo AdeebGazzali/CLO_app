@@ -9,7 +9,31 @@ export const formatDate = (date: Date) => {
     return `${year}-${month}-${day}`;
 };
 export const getDaysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-export const getFirstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+export const getFirstDayOfMonth = (date: Date) => {
+    const day = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+    return (day + 6) % 7; // Monday = 0, Sunday = 6
+};
+
+export const mergeScheduleWithHolidays = (events: any[], holidays: any[], dateFilter?: string) => {
+    const relevantHolidays = dateFilter ? holidays.filter(h => h.start === dateFilter) : holidays;
+    
+    const holidayBlocks = relevantHolidays.map(h => {
+        const isPriority = h.categories.includes('Mercantile') || h.categories.includes('Poya');
+        return {
+            id: h.uid,
+            activity: h.summary,
+            type: 'HOLIDAY',
+            date: h.start,
+            time_range: 'Anytime',
+            is_priority: isPriority,
+            is_goal: false,
+            meta: { isSriLankaHoliday: true, categories: h.categories },
+            completed: false // holidays cannot be completed like tasks
+        };
+    });
+
+    return [...holidayBlocks, ...events];
+};
 
 export const getColorForType = (type: string) => {
     if (!type) return 'border-zinc-700 bg-zinc-900/50 text-zinc-300';
