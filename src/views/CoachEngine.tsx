@@ -9,20 +9,21 @@ export default function CoachEngine() {
     const [expandedMonths, setExpandedMonths] = useState<Record<string, boolean>>({});
     const [isProcessing, setIsProcessing] = useState(false);
 
+    // Function to fetch active sessions
     const fetchSessions = async () => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
         const { data } = await supabase
             .from('coaching_sessions')
-            .select('*, events!inner(*)')
+            .select('*, events(*)')
             .eq('user_id', user.id);
 
         const flattened = (data || []).map((s: any) => ({
             ...s,
-            date: s.events?.date,
+            date: s.date || s.events?.date,
             location: s.location || s.events?.location || 'Port City',
-            time_range: s.events?.time_range
+            time_range: s.events?.time_range || 'Anytime'
         })).sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
         setSessions(flattened);
@@ -79,6 +80,8 @@ export default function CoachEngine() {
 
     return (
         <div className="pb-24 space-y-6 animate-in fade-in duration-300">
+
+
             <div className="bg-gradient-to-br from-amber-900 to-black p-6 rounded-2xl border border-amber-800/30 shadow-2xl relative overflow-hidden">
                 <div className="relative z-10 flex justify-between items-end">
                     <div>
