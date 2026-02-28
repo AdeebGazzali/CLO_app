@@ -11,6 +11,39 @@ export default function App() {
     const [installPrompt, setInstallPrompt] = useState<any>(null);
     const [showInstallBanner, setShowInstallBanner] = useState(false);
 
+    // Single Dummy State History Interception For PWA Swipe-Back
+    useEffect(() => {
+        const handlePopState = () => {
+            // A back gesture was detected
+            if (activeTab !== 'daily') {
+                // If we aren't on home, cleanly push the user back to home
+                setActiveTab('daily');
+            }
+        };
+
+        window.addEventListener('popstate', handlePopState);
+        return () => window.removeEventListener('popstate', handlePopState);
+    }, [activeTab]);
+
+    // Push State interceptor when moving to secondary tabs
+    useEffect(() => {
+        const currentHistoryState = window.history.state;
+
+        if (activeTab === 'daily') {
+            // If returning to home by clicking the nav button (not swipe), clear the dummy state 
+            // so that if they swipe back *from* home, they can exit the app natively.
+            if (currentHistoryState?.isDummy) {
+                window.history.back();
+            }
+        } else {
+            // If moving from home to a secondary tab, push a single dummy state to catch the next back swipe.
+            // We only push it if it doesn't already exist to prevent the infinite stack anti-pattern.
+            if (!currentHistoryState?.isDummy) {
+                window.history.pushState({ isDummy: true }, '');
+            }
+        }
+    }, [activeTab]);
+
     // Scroll to top on tab change
     useEffect(() => {
         window.scrollTo(0, 0);
