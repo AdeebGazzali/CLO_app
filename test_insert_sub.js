@@ -8,16 +8,14 @@ if (!urlMatch || !keyMatch) { console.log('not found'); process.exit(0); }
 
 const supabaseUrl = urlMatch[1].trim();
 const supabaseKey = keyMatch[1].trim();
-
-// Note: If RLs blocks insert, we can test select, but since we are impersonating a user, 
-// a select on limit 1 checking the column names is faster.
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-async function checkSchema() {
+async function check() {
+    const { data: { user } } = await supabase.auth.getUser();
+    console.log('User:', user?.id || 'NO USER (Auth failed or no session)');
+
+    // We will attempt a dummy insert or just select the top row
     const { data, error } = await supabase.from('recurring_expenses').select('*').limit(1);
-    console.log("SCHEMA DUMP", data);
-    if (error) {
-        console.log("SCHEMA ERROR", error);
-    }
+    console.log('Select Result:', { data, error });
 }
-checkSchema();
+check();
