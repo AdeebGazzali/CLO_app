@@ -244,6 +244,31 @@ export default function WealthArchitecture() {
         });
     };
 
+    const handleMarkRecurringPaid = async (exp: any) => {
+        if (!window.confirm(`Mark ${exp.title} as paid? This will deduct LKR ${exp.amount.toLocaleString()} from your linked funds.`)) return;
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { error } = await supabase.rpc('deduct_expense_atomic', { p_user_id: user.id, p_amount: exp.amount });
+        if (error) {
+            console.error('RPC Error:', error);
+            alert('Transaction failed. Database logic error.');
+            return;
+        }
+
+        await supabase.from('recurring_expenses').update({ is_paid_this_month: true }).eq('id', exp.id);
+        await supabase.from('wallet_history').insert({
+            user_id: user.id,
+            amount: -exp.amount,
+            description: `Paid Recurring: ${exp.title}`,
+            date: formatDate(new Date()),
+            type: 'OUT'
+        });
+
+        await fetchData();
+    };
+
     if (loading) return <div className="text-zinc-500 text-center py-10 animate-pulse">Initializing Financial Engine...</div>;
 
     return (
@@ -457,6 +482,60 @@ export default function WealthArchitecture() {
                 </div>
             </div>
 
+            {/* Monthly Bills & Debits Engine */}
+            <div className="mt-8">
+                <div className="flex items-center justify-between mb-4 px-1">
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <Banknote className="w-4 h-4 text-rose-400" /> Monthly Bills & Debits
+                    </h3>
+                </div>
+
+                <div className="space-y-3">
+                    {(() => {
+                        const sortedList = [...recurringExpensesList].sort((a, b) => {
+                            // Unpaid first
+                            if (a.is_paid_this_month !== b.is_paid_this_month) {
+                                return a.is_paid_this_month ? 1 : -1;
+                            }
+                            // Then sort by descending amount
+                            return b.amount - a.amount;
+                        });
+
+                        return sortedList.map(exp => (
+                            <div key={exp.id} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${exp.is_paid_this_month ? 'bg-zinc-900/30 border-zinc-800/30 opacity-60 grayscale' : 'bg-zinc-900 border-zinc-800 shadow-lg'}`}>
+                                <div>
+                                    <h4 className={`font-bold ${exp.is_paid_this_month ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{exp.title}</h4>
+                                    <span className={`text-sm font-mono ${exp.is_paid_this_month ? 'text-zinc-600 line-through' : 'text-rose-400'}`}>LKR {exp.amount.toLocaleString()}</span>
+                                    {exp.is_automatic && <span className="block text-[10px] uppercase text-zinc-500 mt-1">Auto-Deducted</span>}
+                                </div>
+                                <div className="flex gap-2">
+                                    {exp.is_paid_this_month ? (
+                                        <div className="px-3 py-1 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-lg text-xs font-bold">
+                                            PAID
+                                        </div>
+                                    ) : (
+                                        !exp.is_automatic && (
+                                            <button
+                                                onClick={() => handleMarkRecurringPaid(exp)}
+                                                className="p-2 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white rounded-lg border border-emerald-500/20 transition-all shadow-lg"
+                                                title="Mark as Paid"
+                                            >
+                                                <CheckCircle2 className="w-5 h-5" />
+                                            </button>
+                                        )
+                                    )}
+                                </div>
+                            </div>
+                        ));
+                    })()}
+                    {recurringExpensesList.length === 0 && (
+                        <div className="text-center py-6 border border-dashed border-zinc-800 rounded-xl text-zinc-500 text-xs">
+                            No active recurring bills tracked.
+                        </div>
+                    )}
+                </div>
+            </div>
+
             {/* General Expense Logging Modal */}
             <AnimatePresence>
                 {isExpModalOpen && (
@@ -466,16 +545,17 @@ export default function WealthArchitecture() {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
-                                const finalBal = Number(stats.wallet_balance) - amount;
-                                if (finalBal < 0 && !window.confirm(`Warning: This bridges into a negative balance! You will have LKR ${finalBal.toLocaleString()} left. Proceed?`)) {
+                                const { error } = await supabase.rpc('deduct_expense_atomic', { p_user_id: user.id, p_amount: amount });
+                                if (error) {
+                                    console.error('RPC Error:', error);
+                                    alert('Transaction failed. Database logic error.');
                                     return;
                                 }
 
                                 await supabase.from('expenses').insert({ user_id: user.id, amount, reason, date: formatDate(new Date()) });
-                                await supabase.from('user_stats').update({ wallet_balance: finalBal }).eq('user_id', user.id);
                                 await supabase.from('wallet_history').insert({ user_id: user.id, amount: -amount, description: reason, date: formatDate(new Date()), type: 'OUT' });
 
-                                setStats(prev => ({ ...prev, wallet_balance: finalBal }));
+                                await fetchData();
                                 setIsExpModalOpen(false);
                             }}
                         />
@@ -567,29 +647,7 @@ export default function WealthArchitecture() {
                                 await supabase.from('recurring_expenses').delete().eq('id', id);
                                 await fetchData(); // Trigger global recalc immediately
                             }}
-                            onMarkPaid={async (exp) => {
-                                if (!window.confirm(`Mark ${exp.title} as paid? This will deduct LKR ${exp.amount.toLocaleString()} directly from your Wallet.`)) return;
-
-                                const { data: { user } } = await supabase.auth.getUser();
-                                if (!user) return;
-
-                                const finalBal = Number(stats.wallet_balance) - exp.amount;
-
-                                // 1. Set expense as paid
-                                await supabase.from('recurring_expenses').update({ is_paid_this_month: true }).eq('id', exp.id);
-                                // 2. Deduct from wallet
-                                await supabase.from('user_stats').update({ wallet_balance: finalBal }).eq('user_id', user.id);
-                                // 3. Log history
-                                await supabase.from('wallet_history').insert({
-                                    user_id: user.id,
-                                    amount: -exp.amount,
-                                    description: `Paid Recurring: ${exp.title}`,
-                                    date: formatDate(new Date()),
-                                    type: 'OUT'
-                                });
-
-                                await fetchData();
-                            }}
+                            onMarkPaid={handleMarkRecurringPaid}
                         />
                     </GenericModal>
                 )}
