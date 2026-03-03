@@ -1,5 +1,5 @@
 import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, Activity, PlusCircle, History, Trash2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { formatDate } from '../lib/utils';
 import { executeRecurringPayment } from '../lib/billingEngine';
@@ -12,6 +12,7 @@ interface UserStats {
     wealth_uni_fund: number;
     wealth_uni_target: number;
     active_uni_plan: string;
+    uni_installments_paid: number[];
 }
 
 interface PriorityExpense {
@@ -66,10 +67,12 @@ export default function WealthArchitecture() {
         wallet_salary: 46775,
         wealth_uni_fund: 0,
         wealth_uni_target: 800000,
-        active_uni_plan: 'Plan 02'
+        active_uni_plan: 'Plan 02',
+        uni_installments_paid: []
     });
 
     const [gbpRate, setGbpRate] = useState<number>(385.0); // Fallback
+    const [gbpRateIsLive, setGbpRateIsLive] = useState<boolean>(true);
     const [recentVariableIncome, setRecentVariableIncome] = useState<number>(0);
     const [recurringExpensesTotal, setRecurringExpensesTotal] = useState<number>(0);
     const [recurringExpensesList, setRecurringExpensesList] = useState<RecurringExpense[]>([]);
@@ -78,181 +81,265 @@ export default function WealthArchitecture() {
 
     // UI States
     const [loading, setLoading] = useState(true);
+    const [fetchError, setFetchError] = useState<string | null>(null);
     const [isExpModalOpen, setIsExpModalOpen] = useState(false);
     const [isPriorityModalOpen, setIsPriorityModalOpen] = useState(false);
     const [isAddFundModalOpen, setIsAddFundModalOpen] = useState(false);
+    const [isSweepModalOpen, setIsSweepModalOpen] = useState(false);
     const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
 
     // Sync Logic
     const fetchData = async () => {
         setLoading(true);
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        setFetchError(null);
+        let timeoutId: ReturnType<typeof setTimeout>;
+        let isTimedOut = false;
 
-        // 1. User Stats
-        const { data: statsData, error: statsError } = await supabase
-            .from('user_stats')
-            .select('*')
-            .eq('user_id', user.id)
-            .single();
-
-        let currentStats = statsData;
-        if (!currentStats && statsError?.code === 'PGRST116') {
-            const { data: inserted } = await supabase.from('user_stats').insert({
-                user_id: user.id, wallet_balance: 0, wallet_salary: 46775, wealth_uni_fund: 0, active_uni_plan: 'Plan 02'
-            }).select().single();
-            currentStats = inserted;
-        }
-        if (currentStats) setStats(currentStats as UserStats);
-
-        // 2. Fetch Exchange Rate
         try {
-            const res = await fetch('https://open.er-api.com/v6/latest/GBP');
-            const rateData = await res.json();
-            if (rateData && rateData.rates && rateData.rates.LKR) {
-                setGbpRate(rateData.rates.LKR);
+            timeoutId = setTimeout(() => {
+                isTimedOut = true;
+                setFetchError('Connection timeout - The server took too long to respond.');
+                setLoading(false);
+            }, 10000);
+
+            const { data: { user }, error: authError } = await supabase.auth.getUser();
+            if (isTimedOut) return;
+            if (authError || !user) throw new Error("Auth failed");
+
+            // 1. User Stats
+            const { data: statsData, error: statsError } = await supabase
+                .from('user_stats')
+                .select('*')
+                .eq('user_id', user.id)
+                .single();
+
+            let currentStats = statsData;
+            if (!currentStats && statsError?.code === 'PGRST116') {
+                const { data: inserted } = await supabase.from('user_stats').insert({
+                    user_id: user.id, wallet_balance: 0, wallet_salary: 46775, wealth_uni_fund: 0, active_uni_plan: 'Plan 02', uni_installments_paid: []
+                }).select().single();
+                currentStats = inserted;
             }
-        } catch (e) {
-            console.error("Exchange API failed, using fallback.");
+            if (currentStats) {
+                if (!currentStats.uni_installments_paid) currentStats.uni_installments_paid = [];
+                setStats(currentStats as UserStats);
+            }
+            if (isTimedOut) return;
+
+            // 2. Fetch Exchange Rate
+            try {
+                const res = await fetch('https://open.er-api.com/v6/latest/GBP');
+                const rateData = await res.json();
+                if (rateData?.rates?.LKR) {
+                    setGbpRate(rateData.rates.LKR);
+                    setGbpRateIsLive(true);
+                    localStorage.setItem('cached_gbp_rate', JSON.stringify({
+                        rate: rateData.rates.LKR,
+                        fetchedAt: new Date().toISOString()
+                    }));
+                }
+            } catch (e) {
+                console.error("Exchange API failed, using fallback.");
+                const cached = localStorage.getItem('cached_gbp_rate');
+                if (cached) {
+                    const { rate, fetchedAt } = JSON.parse(cached);
+                    setGbpRate(rate);
+                    setGbpRateIsLive(false);
+                    const ageHours = (Date.now() - new Date(fetchedAt).getTime()) / 36e5;
+                    if (ageHours > 24) console.warn(`GBP rate is ${ageHours.toFixed(0)}hrs old`);
+                } else {
+                    setGbpRate(385.0);
+                    setGbpRateIsLive(false);
+                }
+            }
+            if (isTimedOut) return;
+
+            // 3. Fetch Variables (Last 6 Coaching Payouts for Average)
+            const { data: recentPayouts } = await supabase.from('wallet_history')
+                .select('amount')
+                .eq('user_id', user.id)
+                .eq('type', 'IN')
+                .like('description', 'Coaching Income:%')
+                .order('id', { ascending: false })
+                .limit(6);
+
+            const recentInc = recentPayouts?.length
+                ? recentPayouts.reduce((s, p) => s + Number(p.amount), 0) / recentPayouts.length
+                : 0;
+            setRecentVariableIncome(recentInc);
+            if (isTimedOut) return;
+
+            // 4. Fetch Recurring Expenses
+            const { data: recurring } = await supabase.from('recurring_expenses')
+                .select('*')
+                .eq('user_id', user.id);
+            if (isTimedOut) return;
+
+            const activeRecurringList = (recurring || []) as RecurringExpense[];
+
+            // Calculate upcoming total dynamically for capability engine (looking ahead to the next 25th)
+            const today = new Date();
+            const nextMilestoneDate = new Date(today.getFullYear(), today.getMonth(), 25);
+            if (today.getDate() > 25) {
+                nextMilestoneDate.setMonth(nextMilestoneDate.getMonth() + 1);
+            }
+
+            const upcomingRecurringTotal = activeRecurringList
+                .filter(r => {
+                    const dueDate = new Date(r.next_due_date);
+                    dueDate.setHours(0, 0, 0, 0);
+                    return dueDate <= nextMilestoneDate;
+                })
+                .reduce((acc, r) => acc + Number(r.amount), 0);
+
+            // Safe Remaining Capital Calculation is handled directly inside the calculateDynamicWaterfallRequirement engine lower down.
+            setRecurringExpensesTotal(upcomingRecurringTotal);
+            setRecurringExpensesList(activeRecurringList);
+
+            // 5. Fetch Priority Goals
+            const { data: priorities } = await supabase.from('priority_expenses')
+                .select('*')
+                .eq('user_id', user.id)
+                .eq('is_fulfilled', false)
+                .order('target_date', { ascending: true });
+            if (isTimedOut) return;
+            if (priorities) setPriorityExpenses(priorities as PriorityExpense[]);
+
+            // 6. Fetch Recent Raw Expenses for Undo functionality
+            const { data: expenses } = await supabase.from('expenses')
+                .select('*')
+                .eq('user_id', user.id)
+                .order('id', { ascending: false })
+                .limit(5);
+            if (isTimedOut) return;
+            if (expenses) setRecentExpenses(expenses);
+
+            clearTimeout(timeoutId);
+        } catch (err: any) {
+            console.error("Fetch Data Error:", err);
+            setFetchError(err.message || "Failed to load data.");
+        } finally {
+            clearTimeout(timeoutId!);
+            if (!isTimedOut) setLoading(false);
         }
-
-        // 3. Fetch Variables (Last Coaching Payout)
-        const { data: latestPayout } = await supabase.from('wallet_history')
-            .select('amount')
-            .eq('user_id', user.id)
-            .eq('type', 'IN')
-            .like('description', 'Coaching Income:%')
-            .order('id', { ascending: false })
-            .limit(1)
-            .single();
-
-        const recentInc = latestPayout ? Number(latestPayout.amount) : 0;
-        setRecentVariableIncome(recentInc);
-
-        // 4. Fetch Recurring Expenses
-        const { data: recurring } = await supabase.from('recurring_expenses')
-            .select('*')
-            .eq('user_id', user.id);
-
-        const activeRecurringList = (recurring || []) as RecurringExpense[];
-
-        // Calculate unpaid total dynamically (if due date is past or today)
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
-
-        const unpaidRecurringTotal = activeRecurringList
-            .filter(r => {
-                const dueDate = new Date(r.next_due_date);
-                dueDate.setHours(0, 0, 0, 0);
-                return todayStart >= dueDate;
-            })
-            .reduce((acc, r) => acc + Number(r.amount), 0);
-        // Safe Remaining Capital Calculation is handled directly inside the calculateDynamicWaterfallRequirement engine lower down.
-        setRecurringExpensesTotal(unpaidRecurringTotal);
-        setRecurringExpensesList(activeRecurringList);
-
-        // 5. Fetch Priority Goals
-        const { data: priorities } = await supabase.from('priority_expenses')
-            .select('*')
-            .eq('user_id', user.id)
-            .eq('is_fulfilled', false)
-            .order('target_date', { ascending: true });
-        if (priorities) setPriorityExpenses(priorities as PriorityExpense[]);
-
-        // 6. Fetch Recent Raw Expenses for Undo functionality
-        const { data: expenses } = await supabase.from('expenses')
-            .select('*')
-            .eq('user_id', user.id)
-            .order('id', { ascending: false })
-            .limit(5);
-        if (expenses) setRecentExpenses(expenses);
-
-        setLoading(false);
     };
 
     useEffect(() => { fetchData(); }, []);
 
     // Core Algorithms: The Waterfall Engine
-    const calculateDynamicWaterfallRequirement = (planKey: string) => {
-        const installments = [...UNIVERSITY_PLANS[planKey]].sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
+    const allPlanMetrics = useMemo(() => {
+        const calculateDynamicWaterfallRequirement = (planKey: string) => {
+            // Include original index before any sorting/filtering to check if paid
+            const planInsts = UNIVERSITY_PLANS[planKey] || [];
+            const mappedInsts = planInsts.map((inst, idx) => ({ ...inst, originalIndex: idx }));
+            const installments = [...mappedInsts].sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
 
-        let today = new Date();
-        // Determine Next Milestone Date (closest upcoming 25th)
-        let nextMilestoneDate = new Date(today.getFullYear(), today.getMonth(), 25);
-        if (today.getDate() > 25) {
-            // Shift to the 25th of the following month
-            nextMilestoneDate.setMonth(nextMilestoneDate.getMonth() + 1);
-        }
+            let today = new Date();
+            let nextMilestoneDate = new Date(today.getFullYear(), today.getMonth(), 25);
+            if (today.getDate() > 25) {
+                nextMilestoneDate.setMonth(nextMilestoneDate.getMonth() + 1);
+            }
 
-        const unpaidInstallments = installments.filter(i => i.deadline >= nextMilestoneDate);
+            // Unpaid if deadline is future AND not explicitly marked paid in state
+            const paidArray = stats.uni_installments_paid || [];
+            const unpaidInstallments = installments.filter(i =>
+                i.deadline >= nextMilestoneDate && !paidArray.includes(i.originalIndex)
+            );
 
-        if (unpaidInstallments.length === 0) return { baseline: 0, dynamic: 0 }; // Plan completed
+            if (unpaidInstallments.length === 0) return { baseline: 0, dynamic: 0 };
 
-        let totalRemainingCost = 0;
-        for (const inst of unpaidInstallments) {
-            const lkrVal = inst.amountGbp ? (inst.amountGbp * gbpRate) : (inst.amountLkr || 0);
-            totalRemainingCost += lkrVal;
-        }
+            let totalRemainingCost = 0;
+            for (const inst of unpaidInstallments) {
+                const lkrVal = inst.amountGbp ? (inst.amountGbp * gbpRate) : (inst.amountLkr || 0);
+                totalRemainingCost += lkrVal;
+            }
 
-        const finalInstallmentDate = unpaidInstallments[unpaidInstallments.length - 1].deadline;
+            const finalInstallmentDate = unpaidInstallments[unpaidInstallments.length - 1].deadline;
 
-        // Months remaining from the Next Milestone to the Final Installment
-        const diffDays = (finalInstallmentDate.getTime() - nextMilestoneDate.getTime()) / (1000 * 3600 * 24);
-        let totalMonthsRemaining = diffDays / 30.44;
+            const diffDays = (finalInstallmentDate.getTime() - nextMilestoneDate.getTime()) / (1000 * 3600 * 24);
+            let totalMonthsRemaining = Math.max(1, diffDays / 30.44);
 
-        // Prevent division by zero if we are on the final month
-        totalMonthsRemaining = Math.max(1, totalMonthsRemaining);
+            const baselineRequirement = totalRemainingCost / totalMonthsRemaining;
+            const netDeficit = Math.max(0, totalRemainingCost - Number(stats.wealth_uni_fund));
+            const dynamicRequirement = netDeficit / totalMonthsRemaining;
 
-        // Baseline Requirement is total architectural cost spread across the true remaining time frame
-        const baselineRequirement = totalRemainingCost / totalMonthsRemaining;
+            return { baseline: baselineRequirement, dynamic: dynamicRequirement };
+        };
 
-        // Dynamic Requirement accounts for what is already physically saved in the Uni Fund
-        const netDeficit = Math.max(0, totalRemainingCost - Number(stats.wealth_uni_fund));
-        const dynamicRequirement = netDeficit / totalMonthsRemaining;
-
-        return { baseline: baselineRequirement, dynamic: dynamicRequirement };
-    };
+        return {
+            'Plan 01': calculateDynamicWaterfallRequirement('Plan 01'),
+            'Plan 02': calculateDynamicWaterfallRequirement('Plan 02'),
+            'Plan 03': calculateDynamicWaterfallRequirement('Plan 03')
+        };
+    }, [stats.wealth_uni_fund, stats.active_uni_plan, gbpRate, stats.uni_installments_paid]);
 
     // Derived States
-    const activeRequirementMetrics = calculateDynamicWaterfallRequirement(stats.active_uni_plan);
+    const activeRequirementMetrics = allPlanMetrics[stats.active_uni_plan as keyof typeof allPlanMetrics] || allPlanMetrics['Plan 02'];
     const activeMonthlyRequirement = activeRequirementMetrics.baseline;
     const activeDynamicRequirement = activeRequirementMetrics.dynamic;
 
     // Total Liquid Assets (Physical Cash)
     const totalLiquidAssets = Math.max(0, Number(stats.wallet_balance)) + Math.max(0, Number(stats.wealth_uni_fund));
 
-    // Capabilities
-    const monthlyCapability = totalLiquidAssets - activeMonthlyRequirement - recurringExpensesTotal;
+    // Capabilities (Strict Monthly Cash Flow)
+    const monthlyCapability = Number(stats.wallet_balance) - activeDynamicRequirement - recurringExpensesTotal;
 
-    // Smart Recommendation logic based on new metrics (Projected against theoretical income mapping limits)
-    let recommendedPlan = 'Plan 03';
-    // Assume basic income capacity is wallet salary + average coaching just for recommendations
-    const projectedRecommendationCapacity = Number(stats.wallet_salary) + recentVariableIncome - recurringExpensesTotal;
-    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 02').baseline + 10000) recommendedPlan = 'Plan 02';
-    if (projectedRecommendationCapacity > calculateDynamicWaterfallRequirement('Plan 01').baseline + 10000) recommendedPlan = 'Plan 01';
+    // Smart Recommendation logic using static, non-circular baseline
+    const staticPlanMonthlyRate = (planKey: string) => {
+        const installments = UNIVERSITY_PLANS[planKey] || [];
+        const totalCost = installments.reduce((sum, inst) =>
+            sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0);
+        if (installments.length === 0) return 0;
 
-    // Handlers
-    const handleSwitchPlan = async (plan: string) => {
-        setStats(prev => ({ ...prev, active_uni_plan: plan }));
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) await supabase.from('user_stats').update({ active_uni_plan: plan }).eq('user_id', user.id);
+        const lastDate = installments[installments.length - 1].deadline;
+        const totalMonths = Math.max(1, (lastDate.getTime() - new Date().getTime()) / (1000 * 3600 * 24 * 30.44));
+        return totalCost / totalMonths;
     };
 
-    const handlePayoutToFund = async () => {
-        const amountToTransfer = Number(stats.wallet_balance);
-        if (amountToTransfer <= 0) {
+    let recommendedPlan = 'Plan 03';
+    const projectedRecommendationCapacity = Number(stats.wallet_salary) + recentVariableIncome - recurringExpensesTotal;
+    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 02') + 10000) recommendedPlan = 'Plan 02';
+    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 01') + 10000) recommendedPlan = 'Plan 01';
+
+    // Handlers
+    const handleMarkInstallmentPaid = async (_planKey: string, installmentIndex: number) => {
+        const paidArray = stats.uni_installments_paid || [];
+        if (paidArray.includes(installmentIndex)) return;
+        const updated = [...paidArray, installmentIndex];
+        setStats(prev => ({ ...prev, uni_installments_paid: updated }));
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+            const { error } = await supabase.from('user_stats').update({ uni_installments_paid: updated }).eq('user_id', user.id);
+            if (error) {
+                setStats(prev => ({ ...prev, uni_installments_paid: paidArray }));
+                alert("Failed to sync paid status to server.");
+            }
+        }
+    };
+
+    const handleSwitchPlan = async (plan: string) => {
+        const previous = stats.active_uni_plan;
+        setStats(prev => ({ ...prev, active_uni_plan: plan }));
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (user) {
+                const { error } = await supabase.from('user_stats').update({ active_uni_plan: plan }).eq('user_id', user.id);
+                if (error) throw error;
+            }
+        } catch (err) {
+            console.error("Plan switch rollback triggered due to error:", err);
+            setStats(prev => ({ ...prev, active_uni_plan: previous }));
+            alert("Plan switch failed. Please try again.");
+        }
+    };
+
+    const handlePayoutToFund = () => {
+        if (Number(stats.wallet_balance) <= 0) {
             alert("No funds available to transfer!");
             return;
         }
-
-        const newUniFund = Number(stats.wealth_uni_fund) + amountToTransfer;
-        setStats(prev => ({ ...prev, wallet_balance: 0, wealth_uni_fund: newUniFund }));
-
-        const { data: { user } } = await supabase.auth.getUser();
-        await supabase.from('user_stats').update({ wallet_balance: 0, wealth_uni_fund: newUniFund }).eq('user_id', user?.id);
-        await supabase.from('wallet_history').insert({
-            user_id: user?.id, date: formatDate(new Date()), amount: -amountToTransfer, description: 'Uni Fund Contribution', type: 'OUT'
-        });
+        setIsSweepModalOpen(true);
     };
 
     const handleMarkRecurringPaid = async (exp: RecurringExpense) => {
@@ -295,7 +382,14 @@ export default function WealthArchitecture() {
         await fetchData();
     };
 
-    if (loading) return <div className="text-zinc-500 text-center py-10 animate-pulse">Initializing Financial Engine...</div>;
+    if (loading && !fetchError) return <div className="text-zinc-500 text-center py-10 animate-pulse">Initializing Financial Engine...</div>;
+    if (fetchError) return (
+        <div className="text-zinc-500 text-center py-10 flex flex-col items-center gap-4">
+            <span className="text-rose-400 font-bold block">Engine Offline / Connection Lost</span>
+            <span className="text-xs">{fetchError}</span>
+            <button onClick={fetchData} className="px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-lg text-white font-bold text-xs hover:bg-zinc-800">Retry Connection</button>
+        </div>
+    );
 
     return (
         <div className="pb-32 space-y-6 animate-in fade-in duration-500">
@@ -337,9 +431,15 @@ export default function WealthArchitecture() {
                 <div className="p-4 border-t border-zinc-800/50">
                     <div className="flex items-center justify-between mb-3 text-xs">
                         <span className="font-bold text-zinc-400">Active Architecture</span>
-                        <span className="text-indigo-400 flex items-center gap-1 animate-pulse">
-                            GBP Live @ LKR {gbpRate.toFixed(2)}
-                        </span>
+                        {gbpRateIsLive ? (
+                            <span className="text-indigo-400 flex items-center gap-1 animate-pulse">
+                                GBP Live @ LKR {gbpRate.toFixed(2)}
+                            </span>
+                        ) : (
+                            <span className="text-amber-400 flex items-center gap-1" title="Cached rate - fallback activated">
+                                GBP ⚠ Cached @ LKR {gbpRate.toFixed(2)}
+                            </span>
+                        )}
                     </div>
 
                     <div className="grid grid-cols-3 gap-2 mb-4">
@@ -364,16 +464,27 @@ export default function WealthArchitecture() {
                         </div>
                         <div className="divide-y divide-zinc-800/30 max-h-32 overflow-y-auto no-scrollbar">
                             {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => {
-                                const isPaid = (stats as any).uni_installments_paid?.includes(idx) || false;
+                                const isPaid = stats.uni_installments_paid?.includes(idx) || false;
                                 return (
                                     <div key={idx} className="px-3 py-2 flex justify-between items-center text-xs">
                                         <span className={`font-mono transition-opacity ${isPaid ? 'text-emerald-400 line-through opacity-70' : 'text-zinc-300'}`}>
                                             {inst.amountGbp ? `£${inst.amountGbp.toLocaleString()} (LKR ${(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)` : ``}
                                             {inst.amountLkr ? `LKR ${(inst.amountLkr / 1000).toLocaleString()}k` : ``}
                                         </span>
-                                        <span className={`font-mono text-right font-bold ${isPaid ? 'text-emerald-500' : inst.deadline < new Date() ? 'text-rose-500' : 'text-zinc-500'}`}>
-                                            {isPaid ? '✅ PAID' : formatDate(inst.deadline)}
-                                        </span>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`font-mono text-right font-bold ${isPaid ? 'text-emerald-500' : inst.deadline < new Date() ? 'text-rose-500' : 'text-zinc-500'}`}>
+                                                {isPaid ? '✅ PAID' : formatDate(inst.deadline)}
+                                            </span>
+                                            {!isPaid && (
+                                                <button
+                                                    onClick={() => handleMarkInstallmentPaid(stats.active_uni_plan, idx)}
+                                                    className="p-1 text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-md transition-all"
+                                                    title="Mark as Paid Externally"
+                                                >
+                                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                 );
                             })}
@@ -388,7 +499,7 @@ export default function WealthArchitecture() {
                             <span className="text-zinc-400 font-bold">Remaining Capital Needed</span>
                             <span className="font-mono font-black text-amber-500">
                                 LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst, idx) => {
-                                    if ((stats as any).uni_installments_paid?.includes(idx)) return sum; // If paid, it's no longer needed
+                                    if (stats.uni_installments_paid?.includes(idx)) return sum; // If paid, it's no longer needed
                                     return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate);
                                 }, 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
@@ -475,12 +586,16 @@ export default function WealthArchitecture() {
 
                 <div className="space-y-3">
                     {priorityExpenses.map((expense) => {
-                        // Dynamic forecasting logic simulation based on surplus SafeToSpend per month
-                        const monthsNeeded = monthlyCapability > 0 ? (expense.amount / monthlyCapability) : Infinity;
+                        // Explicit forecasting logic using a dedicated monthly savings rate
+                        const monthlySavingsRate = Number(stats.wallet_balance) > 0
+                            ? Math.max(0, Number(stats.wallet_salary) + recentVariableIncome - activeDynamicRequirement - recurringExpensesTotal)
+                            : 0;
+
+                        const monthsNeeded = monthlySavingsRate > 0 ? (expense.amount / monthlySavingsRate) : Infinity;
                         const projectedDate = new Date();
                         if (monthsNeeded !== Infinity) projectedDate.setMonth(projectedDate.getMonth() + monthsNeeded);
 
-                        const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || monthlyCapability <= 0;
+                        const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || monthlySavingsRate <= 0;
 
                         return (
                             <div key={expense.id} className="p-4 rounded-xl border border-zinc-800 bg-zinc-900 shadow-lg">
@@ -619,6 +734,10 @@ export default function WealthArchitecture() {
                     <GenericModal onClose={() => setIsExpModalOpen(false)} title="Log General Expense">
                         <ExpenseForm
                             onSave={async (amount, reason) => {
+                                if (amount <= 0 || amount > Number(stats.wallet_balance)) {
+                                    alert(`Invalid amount. Must be between 1 and LKR ${Number(stats.wallet_balance).toLocaleString()}.`);
+                                    return;
+                                }
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
@@ -650,13 +769,16 @@ export default function WealthArchitecture() {
                                 if (!user) return;
 
                                 // Risk Validation upfront
-                                const monthsNeeded = monthlyCapability > 0 ? (amount / monthlyCapability) : Infinity;
+                                const monthlySavingsRate = Number(stats.wallet_balance) > 0
+                                    ? Math.max(0, Number(stats.wallet_salary) + recentVariableIncome - activeDynamicRequirement - recurringExpensesTotal)
+                                    : 0;
+                                const monthsNeeded = monthlySavingsRate > 0 ? (amount / monthlySavingsRate) : Infinity;
                                 const trgt = new Date(dateStr);
                                 const today = new Date();
                                 const actualMonthsDiff = (trgt.getTime() - today.getTime()) / (1000 * 3600 * 24 * 30.44);
 
-                                if (monthsNeeded > actualMonthsDiff || monthlyCapability <= 0) {
-                                    if (!window.confirm(`RISK: Mathematical override triggered. Saving for this item by ${dateStr} requires LKR ${(amount / Math.max(1, actualMonthsDiff)).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo, which completely destroys your active University Plan architecture. Are you absolutely sure you want to log it?`)) {
+                                if (monthsNeeded > actualMonthsDiff || monthlySavingsRate <= 0) {
+                                    if (!window.confirm(`RISK: Mathematical override triggered. Saving for this item by ${dateStr} requires LKR ${(amount / Math.max(1, actualMonthsDiff)).toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo, which is highly risky. Are you absolutely sure you want to log it?`)) {
                                         return;
                                     }
                                 }
@@ -694,6 +816,41 @@ export default function WealthArchitecture() {
 
                                 setStats(prev => ({ ...prev, wealth_uni_fund: newFundBal }));
                                 setIsAddFundModalOpen(false);
+                            }}
+                        />
+                    </GenericModal>
+                )}
+            </AnimatePresence>
+
+            {/* Fund Sweep Modal */}
+            <AnimatePresence>
+                {isSweepModalOpen && (
+                    <GenericModal onClose={() => setIsSweepModalOpen(false)} title="Sweep Operating Surplus">
+                        <FundSweepForm
+                            maxAmount={Number(stats.wallet_balance)}
+                            onSave={async (amountToTransfer) => {
+                                const newWalletBal = Number(stats.wallet_balance) - amountToTransfer;
+                                const newUniFund = Number(stats.wealth_uni_fund) + amountToTransfer;
+                                const prevWallet = stats.wallet_balance;
+                                const prevUniFund = stats.wealth_uni_fund;
+
+                                setStats(prev => ({ ...prev, wallet_balance: newWalletBal, wealth_uni_fund: newUniFund }));
+
+                                const { data: { user } } = await supabase.auth.getUser();
+                                if (!user) return;
+
+                                const { error } = await supabase.from('user_stats').update({ wallet_balance: newWalletBal, wealth_uni_fund: newUniFund }).eq('user_id', user.id);
+                                if (error) {
+                                    setStats(prev => ({ ...prev, wallet_balance: prevWallet, wealth_uni_fund: prevUniFund }));
+                                    alert("Transfer failed. Please try again.");
+                                    return;
+                                }
+
+                                await supabase.from('wallet_history').insert({
+                                    user_id: user.id, date: formatDate(new Date()), amount: -amountToTransfer, description: 'Uni Fund Contribution', type: 'OUT'
+                                });
+
+                                setIsSweepModalOpen(false);
                             }}
                         />
                     </GenericModal>
@@ -910,6 +1067,45 @@ function AddFundForm({ onSave }: { onSave: (amount: number, dateStr: string, sou
                 className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
             >
                 {isSubmitting ? 'Securing Transaction...' : 'Add Directly to Fund'}
+            </button>
+        </div>
+    )
+}
+
+function FundSweepForm({ maxAmount, onSave }: { maxAmount: number, onSave: (amount: number) => Promise<void> }) {
+    const [amount, setAmount] = useState('');
+    const [isSubmitting, setIsSubmitting] = useState(false);
+
+    return (
+        <div className="space-y-4 pb-12">
+            <div>
+                <label className="text-xs font-bold text-zinc-500 uppercase flex justify-between mb-2">
+                    <span>Amount to Sweep</span>
+                    <button onClick={() => setAmount(maxAmount.toString())} className="text-indigo-400 hover:text-indigo-300">Set Max (LKR {maxAmount.toLocaleString()})</button>
+                </label>
+                <input type="number" required value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-indigo-500 outline-none disabled:opacity-50" placeholder="0" />
+            </div>
+
+            <div className="flex justify-between text-xs text-zinc-400 px-1 py-4">
+                <span>Remaining Wallet Balance:</span>
+                <span className="font-mono font-bold text-white">LKR {Math.max(0, maxAmount - Number(amount || 0)).toLocaleString()}</span>
+            </div>
+
+            <button
+                onClick={async () => {
+                    const numAmount = Number(amount);
+                    if (numAmount > 0 && numAmount <= maxAmount) {
+                        setIsSubmitting(true);
+                        await onSave(numAmount);
+                        setIsSubmitting(false);
+                    } else {
+                        alert(`Amount must be between 1 and max limit`);
+                    }
+                }}
+                disabled={!amount || isSubmitting || Number(amount) <= 0 || Number(amount) > maxAmount}
+                className="w-full py-4 mt-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
+            >
+                {isSubmitting ? 'Transferring...' : 'Execute Sweep to Uni Fund'}
             </button>
         </div>
     )
