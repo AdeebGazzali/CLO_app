@@ -2,6 +2,7 @@ import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, Ar
 import { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import { formatDate } from '../lib/utils';
+import { executeRecurringPayment } from '../lib/billingEngine';
 import { motion, AnimatePresence } from 'framer-motion';
 
 // Types
@@ -27,6 +28,7 @@ interface RecurringExpense {
     amount: number;
     billing_frequency: 'monthly' | 'annually';
     is_automatic: boolean;
+    inject_to_calendar: boolean;
     anchor_day: number;
     next_due_date: string;
     end_date: string | null;
@@ -34,7 +36,7 @@ interface RecurringExpense {
 }
 
 // Plan Configurations
-const UNIVERSITY_PLANS: Record<string, { amountGbp?: number, amountLkr?: number, deadline: Date }[]> = {
+export const UNIVERSITY_PLANS: Record<string, { amountGbp?: number, amountLkr?: number, deadline: Date }[]> = {
     'Plan 01': [
         { amountLkr: 549000, deadline: new Date('2026-09-25T00:00:00Z') },
         { amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') }
@@ -145,7 +147,11 @@ export default function WealthArchitecture() {
                 return todayStart >= dueDate;
             })
             .reduce((acc, r) => acc + Number(r.amount), 0);
-
+        // Safe Remaining Capital Calculation (Zero-Floor to prevent negative over-savings drift)
+        const unfulfilledUniCost = UNIVERSITY_PLANS[currentStats?.active_uni_plan || 'Plan 02']?.reduce((sum, inst, idx) => {
+            if (currentStats?.uni_installments_paid?.includes(idx)) return sum;
+            return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * (gbpRate || 385.0));
+        }, 0) || 0;
         setRecurringExpensesTotal(unpaidRecurringTotal);
         setRecurringExpensesList(activeRecurringList);
 
@@ -253,85 +259,18 @@ export default function WealthArchitecture() {
         });
     };
 
-    const handleMarkRecurringPaid = async (exp: any) => {
-        if (!window.confirm(`Mark ${exp.title} as paid? This will deduct LKR ${exp.amount.toLocaleString()} from your linked funds.`)) return;
-
+    const handleMarkRecurringPaid = async (exp: RecurringExpense) => {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        const { error } = await supabase.rpc('deduct_expense_atomic', { p_user_id: user.id, p_amount: exp.amount });
-        if (error) {
-            console.error('RPC Error:', error);
-            alert('Transaction failed. Database logic error.');
-            return;
-        }
+        // Execute the shared billing engine atomic function
+        const { success, error } = await executeRecurringPayment(exp, user.id);
 
-        // Calculate NEW next_due_date
-        const curDate = new Date(exp.next_due_date);
-        let newYear = curDate.getFullYear();
-        let newMonth = curDate.getMonth();
-
-        if (exp.billing_frequency === 'annually') {
-            newYear += 1;
+        if (success) {
+            await fetchData();
         } else {
-            newMonth += 1;
+            alert(`Failed to execute payment: ${error}`);
         }
-
-        // Create new date object attempting to use the anchor_day
-        // If anchor day is 31, and month is Feb, it will overflow into March. 
-        // We handle this by setting to day 1 of the *target* month, 
-        // then finding the max days in that month, then snapping to the min of anchor vs maxDays.
-        const nextTargetMonth = new Date(newYear, newMonth, 1);
-        const actualNewYear = nextTargetMonth.getFullYear();
-        const actualNewMonth = nextTargetMonth.getMonth();
-
-        // Find max days in the actual target month (day 0 of the *following* month)
-        const maxDaysInTargetMonth = new Date(actualNewYear, actualNewMonth + 1, 0).getDate();
-        const finalDay = Math.min(exp.anchor_day, maxDaysInTargetMonth);
-
-        const finalNextDueDate = new Date(actualNewYear, actualNewMonth, finalDay);
-        // Retain original time components or explicitly zero them out 
-        finalNextDueDate.setHours(0, 0, 0, 0);
-
-        // Expiration Check
-        // If end_date exists AND the new date surpasses it (by stripping time on both for safe compare)
-        let isFinished = false;
-        if (exp.end_date) {
-            const endDateObj = new Date(exp.end_date);
-            endDateObj.setHours(0, 0, 0, 0);
-            if (finalNextDueDate > endDateObj) {
-                isFinished = true;
-            }
-        }
-
-        if (isFinished) {
-            // Subscription finished: remove it (or we could add an is_active flag in the future)
-            await supabase.from('recurring_expenses').delete().eq('id', exp.id);
-        } else {
-            // Update row with new due date
-            await supabase.from('recurring_expenses')
-                .update({ next_due_date: finalNextDueDate.toISOString() })
-                .eq('id', exp.id);
-        }
-
-        // Log into standard expenses so it shows in "Recent Logged Expenses" and can be tracked visually
-        await supabase.from('expenses').insert({
-            user_id: user.id,
-            amount: exp.amount,
-            reason: `Recurring: ${exp.title}`,
-            date: formatDate(new Date())
-        });
-
-        // Log into raw ledger
-        await supabase.from('wallet_history').insert({
-            user_id: user.id,
-            amount: -exp.amount,
-            description: `Paid Recurring: ${exp.title}`,
-            date: formatDate(new Date()),
-            type: 'OUT'
-        });
-
-        await fetchData();
     };
 
     const handleUndoExpense = async (exp: any) => {
@@ -428,17 +367,20 @@ export default function WealthArchitecture() {
                             <span>Due Date</span>
                         </div>
                         <div className="divide-y divide-zinc-800/30 max-h-32 overflow-y-auto no-scrollbar">
-                            {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => (
-                                <div key={idx} className="px-3 py-2 flex justify-between items-center text-xs">
-                                    <span className="font-mono text-zinc-300">
-                                        {inst.amountGbp ? `£${inst.amountGbp.toLocaleString()} (LKR ${(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)` : ``}
-                                        {inst.amountLkr ? `LKR ${(inst.amountLkr / 1000).toLocaleString()}k` : ``}
-                                    </span>
-                                    <span className={`font-mono text-right ${inst.deadline < new Date() ? 'text-rose-500' : 'text-zinc-500'}`}>
-                                        {formatDate(inst.deadline)}
-                                    </span>
-                                </div>
-                            ))}
+                            {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => {
+                                const isPaid = (stats as any).uni_installments_paid?.includes(idx) || false;
+                                return (
+                                    <div key={idx} className="px-3 py-2 flex justify-between items-center text-xs">
+                                        <span className={`font-mono transition-opacity ${isPaid ? 'text-emerald-400 line-through opacity-70' : 'text-zinc-300'}`}>
+                                            {inst.amountGbp ? `£${inst.amountGbp.toLocaleString()} (LKR ${(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)` : ``}
+                                            {inst.amountLkr ? `LKR ${(inst.amountLkr / 1000).toLocaleString()}k` : ``}
+                                        </span>
+                                        <span className={`font-mono text-right font-bold ${isPaid ? 'text-emerald-500' : inst.deadline < new Date() ? 'text-rose-500' : 'text-zinc-500'}`}>
+                                            {isPaid ? '✅ PAID' : formatDate(inst.deadline)}
+                                        </span>
+                                    </div>
+                                );
+                            })}
                         </div>
                         <div className="bg-zinc-950/50 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs">
                             <span className="text-zinc-400 font-bold">Total Architecture Cost</span>
@@ -449,7 +391,10 @@ export default function WealthArchitecture() {
                         <div className="bg-zinc-950/80 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs pb-4">
                             <span className="text-zinc-400 font-bold">Remaining Capital Needed</span>
                             <span className="font-mono font-black text-amber-500">
-                                LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst, idx) => {
+                                    if ((stats as any).uni_installments_paid?.includes(idx)) return sum; // If paid, it's no longer needed
+                                    return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate);
+                                }, 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
                         </div>
                     </div>
@@ -465,60 +410,61 @@ export default function WealthArchitecture() {
                         <Activity className="w-6 h-6 text-zinc-700" />
                     </div>
                 </div>
-            </div>
-
-            {/* Safe To Spend Engine */}
-            <div className="flex flex-col gap-4">
-                <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 relative overflow-hidden">
-                    <div className="flex items-start justify-between relative z-10 mb-4">
-                        <div className="flex items-center gap-1.5">
-                            <Activity className="w-4 h-4 text-amber-400" />
-                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Monthly Capability Engine</h4>
+                <div className="flex flex-col gap-4">
+                    <div className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 relative overflow-hidden">
+                        <div className="flex items-start justify-between relative z-10 mb-4">
+                            <div className="flex items-center gap-1.5">
+                                <Activity className="w-4 h-4 text-amber-400" />
+                                <h4 className="text-[10px] font-bold uppercase tracking-widest text-amber-500">Monthly Capability Engine</h4>
+                            </div>
                         </div>
+
+                        <div className="grid grid-cols-3 gap-2 mb-4 relative z-10">
+                            <div className="bg-black/50 p-2 rounded-lg border border-zinc-800/50">
+                                <span className="block text-[9px] uppercase font-bold text-zinc-500">Liquid</span>
+                                <span className="font-mono text-zinc-300 text-sm">LKR {totalLiquidAssets.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                            <div className="bg-black/50 p-2 rounded-lg border border-rose-900/30">
+                                <span className="block text-[9px] uppercase font-bold text-zinc-500">Uni Req.</span>
+                                <span className="font-mono text-rose-400 text-sm">LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                            <div className="bg-black/50 p-2 rounded-lg border border-rose-900/30">
+                                <span className="block text-[9px] uppercase font-bold text-zinc-500">Bills Req.</span>
+                                <span className="font-mono text-rose-400 text-sm">LKR {recurringExpensesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            </div>
+                        </div>
+
+                        <div className="pt-2 border-t border-zinc-800/50 flex justify-between items-center relative z-10">
+                            <span className="text-xs font-bold text-white uppercase tracking-widest">Net Surplus</span>
+                            <div className="text-right">
+                                <span className={`text-xl font-mono font-bold tracking-tight inline-block ${monthlyCapability < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                    LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                </span>
+                                <span className={`ml-2 text-[9px] uppercase font-bold tracking-widest align-top ${monthlyCapability < 0 ? 'text-rose-500/80 bg-rose-500/10' : 'text-emerald-500/80 bg-emerald-500/10'} px-1.5 py-0.5 rounded border ${monthlyCapability < 0 ? 'border-rose-500/20' : 'border-emerald-500/20'}`}>
+                                    {monthlyCapability < 0 ? 'DEFICIT' : 'SURPLUS'}
+                                </span>
+                            </div>
+                        </div>
+
+                        {monthlyCapability < 0 && (
+                            <div className="absolute inset-0 bg-rose-500/5 z-0" />
+                        )}
                     </div>
-
-                    <div className="grid grid-cols-3 gap-2 mb-4 relative z-10">
-                        <div className="bg-black/50 p-2 rounded-lg border border-zinc-800/50">
-                            <span className="block text-[9px] uppercase font-bold text-zinc-500">Liquid</span>
-                            <span className="font-mono text-zinc-300 text-sm">LKR {totalLiquidAssets.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div className="bg-black/50 p-2 rounded-lg border border-rose-900/30">
-                            <span className="block text-[9px] uppercase font-bold text-zinc-500">Uni Req.</span>
-                            <span className="font-mono text-rose-400 text-sm">LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                        <div className="bg-black/50 p-2 rounded-lg border border-rose-900/30">
-                            <span className="block text-[9px] uppercase font-bold text-zinc-500">Bills Req.</span>
-                            <span className="font-mono text-rose-400 text-sm">LKR {recurringExpensesTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
-                        </div>
-                    </div>
-
-                    <div className="pt-2 border-t border-zinc-800/50 flex justify-between items-center relative z-10">
-                        <span className="text-xs font-bold text-white uppercase tracking-widest">Net Surplus</span>
-                        <div className="text-right">
-                            <span className={`text-xl font-mono font-bold tracking-tight inline-block ${monthlyCapability < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                                LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                            </span>
-                            <span className={`ml-2 text-[9px] uppercase font-bold tracking-widest align-top ${monthlyCapability < 0 ? 'text-rose-500/80 bg-rose-500/10' : 'text-emerald-500/80 bg-emerald-500/10'} px-1.5 py-0.5 rounded border ${monthlyCapability < 0 ? 'border-rose-500/20' : 'border-emerald-500/20'}`}>
-                                {monthlyCapability < 0 ? 'DEFICIT' : 'SURPLUS'}
-                            </span>
-                        </div>
-                    </div>
-
-                    {monthlyCapability < 0 && (
-                        <div className="absolute inset-0 bg-rose-500/5 z-0" />
-                    )}
                 </div>
-            </div>
 
-            {monthlyCapability > 0 ? (
-                <p className="text-[10px] text-emerald-500 mt-2 px-1 text-center bg-emerald-950/20 py-2 rounded-lg border border-emerald-900/20">
-                    You have a safe liquid surplus. You can comfortably allocate <strong className="text-emerald-400">LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> towards Priority Goals or leisure.
-                </p>
-            ) : (
-                <p className="text-[10px] text-zinc-500 mt-2 px-1 text-center bg-rose-950/20 py-2 rounded-lg border border-rose-900/20">
-                    You are falling behind. You must generate <strong className="text-rose-400">LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> more in physical cash to secure your upcoming milestone safely.
-                </p>
-            )}
+                {
+                    monthlyCapability > 0 ? (
+                        <p className="text-[10px] text-emerald-500 mt-2 px-1 text-center bg-emerald-950/20 py-2 rounded-lg border border-emerald-900/20">
+                            You have a safe liquid surplus. You can comfortably allocate <strong className="text-emerald-400">LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> towards Priority Goals or leisure.
+                        </p>
+                    ) : (
+                        <p className="text-[10px] text-zinc-500 mt-2 px-1 text-center bg-rose-950/20 py-2 rounded-lg border border-rose-900/20">
+                            You are falling behind. You must generate <strong className="text-rose-400">LKR {Math.abs(monthlyCapability).toLocaleString(undefined, { maximumFractionDigits: 0 })}</strong> more in physical cash to secure your upcoming milestone safely.
+                        </p>
+                    )
+                }
+
+            </div>
 
             {/* Priority Expense Engine */}
             <div className="mt-8">
@@ -764,7 +710,7 @@ export default function WealthArchitecture() {
                     <GenericModal onClose={() => setIsRecurringModalOpen(false)} title="Manage Recurring Definitions">
                         <RecurringExpForm
                             recurringList={recurringExpensesList}
-                            onSave={async (title, amount, firstDueDateStr, billingFrequency, period, is_automatic) => {
+                            onSave={async (title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar) => {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
@@ -787,7 +733,8 @@ export default function WealthArchitecture() {
                                     is_automatic,
                                     anchor_day: anchorDay,
                                     next_due_date: firstDueDate.toISOString(),
-                                    end_date: endDate
+                                    end_date: endDate,
+                                    inject_to_calendar: inject_to_calendar
                                 });
 
                                 if (error) {
@@ -806,7 +753,7 @@ export default function WealthArchitecture() {
                                 await fetchData(); // Trigger global recalc immediately
                             }}
                             onMarkPaid={handleMarkRecurringPaid}
-                            onUpdate={async (id, title, amount, firstDueDateStr, billingFrequency, period, is_automatic) => {
+                            onUpdate={async (id, title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar) => {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
@@ -827,7 +774,8 @@ export default function WealthArchitecture() {
                                     is_automatic,
                                     anchor_day: anchorDay,
                                     next_due_date: firstDueDate.toISOString(),
-                                    end_date: endDate
+                                    end_date: endDate,
+                                    inject_to_calendar: inject_to_calendar
                                 }).eq('id', id);
 
                                 if (error) {
@@ -842,9 +790,8 @@ export default function WealthArchitecture() {
                     </GenericModal>
                 )}
             </AnimatePresence>
-
         </div>
-    )
+    );
 }
 
 function GenericModal({ children, title, onClose }: any) {
@@ -979,20 +926,21 @@ function RecurringExpForm({
     onMarkPaid,
     onUpdate
 }: {
-    recurringList: any[],
-    onSave: (title: string, amount: number, firstDueDateStr: string, billingFrequency: string, period: number, is_automatic: boolean) => Promise<void>,
+    recurringList: RecurringExpense[],
+    onSave: (title: string, amount: number, firstDueDateStr: string, billingFrequency: 'monthly' | 'annually', period: number, is_automatic: boolean, inject_to_calendar: boolean) => Promise<void>,
     onDelete: (id: string) => void,
-    onMarkPaid: (exp: any) => void,
-    onUpdate: (id: string, title: string, amount: number, firstDueDateStr: string, billingFrequency: string, period: number, is_automatic: boolean) => Promise<void>
+    onMarkPaid: (exp: RecurringExpense) => void,
+    onUpdate: (id: string, title: string, amount: number, firstDueDateStr: string, billingFrequency: 'monthly' | 'annually', period: number, is_automatic: boolean, inject_to_calendar: boolean) => Promise<void>
 }) {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [title, setTitle] = useState('');
     const [amount, setAmount] = useState('');
     const [firstDueDate, setFirstDueDate] = useState(formatDate(new Date()));
-    const [billingFrequency, setBillingFrequency] = useState('monthly');
+    const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annually'>('monthly');
     const [period, setPeriod] = useState('0'); // 0 means infinite
     const [customPeriod, setCustomPeriod] = useState('');
     const [isAutomatic, setIsAutomatic] = useState(false);
+    const [injectToCalendar, setInjectToCalendar] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
     // Auto-adjust period limits when switching to annual
@@ -1010,6 +958,7 @@ function RecurringExpForm({
         setFirstDueDate(formatDate(new Date(exp.next_due_date)));
         setBillingFrequency(exp.billing_frequency || 'monthly');
         setIsAutomatic(exp.is_automatic || false);
+        setInjectToCalendar(exp.inject_to_calendar ?? true); // Default to true if undefined
 
         if (!exp.end_date) {
             setPeriod('0');
@@ -1036,7 +985,7 @@ function RecurringExpForm({
 
     const cancelEdit = () => {
         setEditingId(null);
-        setTitle(''); setAmount(''); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
+        setTitle(''); setAmount(''); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly'); setInjectToCalendar(true);
     };
 
     return (
@@ -1065,8 +1014,11 @@ function RecurringExpForm({
                     </div>
                     <div>
                         <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Billing Freq.</label>
-                        <select value={billingFrequency} onChange={e => setBillingFrequency(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white outline-none focus:border-emerald-500 disabled:opacity-50">
-                            <option value="monthly">Monthly</option>
+                        <select
+                            value={billingFrequency}
+                            onChange={(e) => setBillingFrequency(e.target.value as 'monthly' | 'annually')}
+                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50"
+                        >    <option value="monthly">Monthly</option>
                             <option value="annually">Annually</option>
                         </select>
                     </div>
@@ -1085,6 +1037,19 @@ function RecurringExpForm({
                         />
                         <label htmlFor="autoCheck" className="text-xs text-zinc-400 cursor-pointer select-none">
                             Drawn Automatically (No Manual Mark Paid)
+                        </label>
+                    </div>
+                    <div className="flex items-center gap-2 py-1 col-span-2">
+                        <input
+                            type="checkbox"
+                            id="injectToCalendar"
+                            checked={injectToCalendar}
+                            onChange={(e) => setInjectToCalendar(e.target.checked)}
+                            disabled={isSubmitting}
+                            className="w-4 h-4 rounded appearance-none border border-zinc-700 bg-black/50 checked:bg-emerald-500 checked:border-emerald-500 flex items-center justify-center relative after:content-[''] after:hidden checked:after:block after:w-1.5 after:h-2.5 after:border-r-2 after:border-b-2 after:border-white after:rotate-45 after:-mt-0.5"
+                        />
+                        <label htmlFor="injectToCalendar" className="text-xs text-zinc-400 cursor-pointer select-none">
+                            Inject to Calendar (Google Calendar)
                         </label>
                     </div>
                 </div>
@@ -1124,14 +1089,13 @@ function RecurringExpForm({
                         if (title && amount && firstDueDate) {
                             setIsSubmitting(true);
                             if (editingId) {
-                                await onUpdate(editingId, title, Number(amount), firstDueDate, billingFrequency, finalPeriod, isAutomatic);
-                                cancelEdit();
+                                await onUpdate(editingId, title, Number(amount), firstDueDate, billingFrequency, Number(period) || 0, isAutomatic, injectToCalendar);
                             } else {
-                                await onSave(title, Number(amount), firstDueDate, billingFrequency, finalPeriod, isAutomatic);
-                                setTitle(''); setAmount(''); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
+                                await onSave(title, Number(amount), firstDueDate, billingFrequency, Number(period) || 0, isAutomatic, injectToCalendar);
                             }
-                            setIsSubmitting(false);
+                            setIsSubmitting(false); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
                         }
+                        setIsSubmitting(false);
                     }}
                     disabled={!title || !amount || isSubmitting}
                     className={`w-full py-3 mt-2 disabled:opacity-50 text-white font-bold rounded-xl transition ${editingId ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
@@ -1184,8 +1148,6 @@ function RecurringExpForm({
                     {recurringList.length === 0 && <div className="text-center text-xs text-zinc-600 py-4">No recurring limits set.</div>}
                 </div>
             </div>
-        </div>
-    )
+        </div >
+    );
 }
-
-

@@ -8,7 +8,9 @@ import {
     Bike,
     Footprints,
     Dumbbell,
-    Users as UsersIcon
+    Users as UsersIcon,
+    Target,
+    Banknote
 } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 import { motion, PanInfo, AnimatePresence } from 'framer-motion';
@@ -19,11 +21,18 @@ import AddEventWizard from '../components/AddEventWizard';
 import ActivityDetailsModal from '../components/ActivityDetailsModal';
 
 import RunCompletionModal from '../components/RunCompletionModal';
+import { UNIVERSITY_PLANS } from './WealthArchitecture'; // Base definitions
+import { executeRecurringPayment } from '../lib/billingEngine'; // Shared billing math
 
 export default function CommandCenter() {
     const [currentDate, setCurrentDate] = useState(new Date());
     const [scheduleData, setScheduleData] = useState<any[]>([]);
     const [monthData, setMonthData] = useState<any[]>([]);
+
+    // New Calendar Integration State
+    const [userStats, setUserStats] = useState<any>(null);
+    const [recurringBills, setRecurringBills] = useState<any[]>([]);
+
     const [loading, setLoading] = useState(true);
     const [viewMode, setViewMode] = useState<'day' | 'month'>('month');
     const [swipeDirection, setSwipeDirection] = useState<1 | -1>(1);
@@ -34,6 +43,7 @@ export default function CommandCenter() {
     const [editScope, setEditScope] = useState<'single' | 'future' | null>(null);
     const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
     const [selectedActivity, setSelectedActivity] = useState<any>(null);
+    const [isMutating, setIsMutating] = useState<string | null>(null);
 
     // Run Completion Modal
     const [isRunModalOpen, setIsRunModalOpen] = useState(false);
@@ -72,20 +82,144 @@ export default function CommandCenter() {
 
         if (monthError) console.error('Error fetching month data:', monthError);
 
-        setMonthData(monthData || []);
+        // 3. Fetch User Stats for University Progress
+        const { data: statsData, error: statsError } = await supabase
+            .from('user_stats')
+            .select('*')
+            .eq('user_id', user.id)
+            .single();
 
+        if (statsError) console.error('Error fetching user stats:', statsError);
+        setUserStats(statsData || null);
+
+        // 4. Fetch Recurring Expenses flagged for calendar injection
+        const { data: recurringData, error: recurringError } = await supabase
+            .from('recurring_expenses')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('inject_to_calendar', true);
+
+        if (recurringError) console.error('Error fetching recurring bills:', recurringError);
+        setRecurringBills(recurringData || []);
+
+        setMonthData(monthData || []);
         setScheduleData(dayData || []);
         setLoading(false);
     };
 
-    const mergedScheduleData = React.useMemo(() => {
-        const sorted = [...scheduleData].sort((a, b) => {
+    // -------------------------------------------------------------
+    // Virtual Block Generation & View-Forked Overdue Logic
+    // -------------------------------------------------------------
+    const calendarBlocks = React.useMemo(() => {
+        const todayStr = formatDate(new Date());
+
+        // 1. Native Database Events
+        let combinedMonth = [...monthData];
+        let combinedDay = [...scheduleData];
+
+        // Helper: Local Start-of-Day Normalization
+        const normalizeToLocal = (utcDateStr: string | Date | number) => {
+            const d = new Date(utcDateStr);
+            return formatDate(new Date(d.getFullYear(), d.getMonth(), d.getDate()));
+        };
+
+        // 2. University Installment Virtual Blocks
+        if (userStats?.active_uni_plan && UNIVERSITY_PLANS[userStats.active_uni_plan]) {
+            const planDetails = UNIVERSITY_PLANS[userStats.active_uni_plan];
+            const paidIndices = userStats.uni_installments_paid || [];
+
+            planDetails.forEach((installment, idx) => {
+                if (paidIndices.includes(idx)) return; // Already paid
+
+                const localDueStr = normalizeToLocal(installment.deadline);
+                const isOverdue = localDueStr < todayStr;
+
+                const virtualBlock = {
+                    id: `uni-virtual-${idx}`,
+                    date: localDueStr,
+                    type: 'UNI_BILL',
+                    activity: `University Installment ${idx + 1}`,
+                    time_range: 'Anytime',
+                    is_priority: true,
+                    is_goal: false,
+                    completed: false,
+                    meta: {
+                        amountLkr: installment.amountLkr,
+                        amountGbp: installment.amountGbp,
+                        installmentIdx: idx
+                    }
+                };
+
+                // Monthly View Injection
+                combinedMonth.push(virtualBlock);
+
+                // Daily View Injection (Forked Logic)
+                if (viewMode === 'day') {
+                    const viewDateStr = formatDate(currentDate);
+                    // If viewing today, and the bill is overdue, force-inject it so it's unmissable
+                    if (viewDateStr === todayStr && isOverdue) {
+                        combinedDay.push({ ...virtualBlock, date: todayStr, _isOverdueInjection: true });
+                    } else if (localDueStr === viewDateStr) {
+                        // Normal injection if looking at the specific due date
+                        combinedDay.push(virtualBlock);
+                    }
+                }
+            });
+        }
+
+        // 3. Recurring Bills Virtual Blocks
+        recurringBills.forEach((bill) => {
+            const localDueStr = normalizeToLocal(bill.next_due_date);
+            const isOverdue = localDueStr < todayStr;
+
+            const virtualBlock = {
+                id: `bill-virtual-${bill.id}`,
+                date: localDueStr,
+                type: 'BILL',
+                activity: bill.title,
+                time_range: 'Anytime',
+                is_priority: true,
+                is_goal: false,
+                completed: false,
+                meta: {
+                    dbId: bill.id,
+                    amount: bill.amount,
+                    frequency: bill.billing_frequency,
+                    rawExpense: bill
+                }
+            };
+
+            // Monthly View Injection
+            combinedMonth.push(virtualBlock);
+
+            // Daily View Injection (Forked Logic)
+            if (viewMode === 'day') {
+                const viewDateStr = formatDate(currentDate);
+                if (viewDateStr === todayStr && isOverdue) {
+                    combinedDay.push({ ...virtualBlock, date: todayStr, _isOverdueInjection: true });
+                } else if (localDueStr === viewDateStr) {
+                    combinedDay.push(virtualBlock);
+                }
+            }
+        });
+
+        // 4. Sort and Merge with Holidays for Daily View
+        const sortedDay = [...combinedDay].sort((a, b) => {
+            if (a._isOverdueInjection && !b._isOverdueInjection) return -1; // Overdue items at top
+            if (!a._isOverdueInjection && b._isOverdueInjection) return 1;
             if (a.time_range === 'Anytime') return 1;
             if (b.time_range === 'Anytime') return -1;
             return a.time_range.localeCompare(b.time_range);
         });
-        return mergeScheduleWithHolidays(sorted, holidays, formatDate(currentDate));
-    }, [scheduleData, holidays, currentDate]);
+
+        const finalDailyView = mergeScheduleWithHolidays(sortedDay, holidays, formatDate(currentDate));
+
+        return {
+            monthGridView: combinedMonth,
+            dailyListview: finalDailyView
+        };
+
+    }, [scheduleData, monthData, userStats, recurringBills, viewMode, currentDate, holidays]);
 
     useEffect(() => {
         fetchSchedule();
@@ -98,6 +232,45 @@ export default function CommandCenter() {
     }, []);
 
     const handleCheckBlock = async (block: any) => {
+        if (isMutating === block.id) return;
+
+        if (block.type === 'BILL' || block.type === 'UNI_BILL') {
+            if (block.completed) return; // One-way action
+
+            const entityName = block.activity;
+            const amount = block.type === 'BILL' ? block.meta.amount : block.meta.amountLkr;
+
+            if (!window.confirm(`Confirm deduction of LKR ${amount.toLocaleString()} from Operating Wallet for ${entityName}? This action cannot be undone.`)) {
+                return;
+            }
+
+            setIsMutating(block.id);
+            try {
+                const { data: { user } } = await supabase.auth.getUser();
+                if (!user) throw new Error("No user");
+
+                if (block.type === 'BILL') {
+                    await executeRecurringPayment(block.meta.rawExpense, user.id);
+                } else if (block.type === 'UNI_BILL') {
+                    const { error } = await supabase.rpc('mark_installment_paid', {
+                        p_user_id: user.id,
+                        p_installment_idx: block.meta.installmentIdx,
+                        p_deduction_amount: block.meta.amountLkr,
+                        p_bill_title: entityName
+                    });
+                    if (error) console.error("RPC Error:", error);
+                }
+
+                await fetchSchedule(); // Network resolution mapping
+            } catch (err) {
+                console.error("Payment error:", err);
+                alert("Failed to process transaction.");
+            } finally {
+                setIsMutating(null);
+            }
+            return;
+        }
+
         if (block.type !== 'COACHING' && block.type !== 'FITNESS') return;
 
         // Special handling for RUN completion - Open Modal
@@ -413,14 +586,21 @@ export default function CommandCenter() {
                             style={{ willChange: 'transform, opacity', touchAction: 'pan-y' }}
                             className={`space-y-3 px-1 w-full min-h-[60vh] ${loading ? 'opacity-50 pointer-events-none' : ''}`}
                         >
-                            {mergedScheduleData.map((block) => (
+                            {calendarBlocks.dailyListview.map((block) => (
                                 <ActivityBlock
                                     key={block.id}
                                     block={block}
                                     onCheck={handleCheckBlock}
-                                    onClick={() => { setSelectedActivity(block); setIsDetailsModalOpen(true); }}
+                                    isMutating={isMutating === block.id}
+                                    onClick={() => {
+                                        if (block.type !== 'BILL' && block.type !== 'UNI_BILL') {
+                                            setSelectedActivity(block);
+                                            setIsDetailsModalOpen(true);
+                                        }
+                                    }}
                                     isOverlapping={(() => {
                                         if (block.time_range === 'Anytime') return false;
+                                        if (block.type === 'BILL' || block.type === 'UNI_BILL') return false;
                                         const [start, end] = block.time_range.split('-');
                                         if (!start || !end) return false;
                                         const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
@@ -435,7 +615,7 @@ export default function CommandCenter() {
                                     })()}
                                 />
                             ))}
-                            {mergedScheduleData.length === 0 && (
+                            {calendarBlocks.dailyListview.length === 0 && (
                                 <div className="text-center py-10 text-zinc-500">No scheduled blocks.</div>
                             )}
                         </motion.div>
@@ -482,15 +662,17 @@ export default function CommandCenter() {
                                 </div>
 
                                 <div className="space-y-2">
-                                    {mergedScheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 ? (
-                                        mergedScheduleData.filter(b => b.is_priority || b.type === 'FITNESS').slice(0, 3).map((block) => (
+                                    {calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').length > 0 ? (
+                                        calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').slice(0, 3).map((block) => (
                                             <div key={block.id + '-mini'} onClick={() => setViewMode('day')} className="flex items-center gap-3 p-2.5 rounded-xl border border-zinc-800/30 bg-zinc-900/30 cursor-pointer hover:bg-zinc-800/50 transition-colors">
                                                 <div className={`w-8 h-8 rounded-lg bg-zinc-800/80 flex items-center justify-center shrink-0 shadow-inner ${block.type === 'FITNESS'
                                                     ? block.activity.toUpperCase().includes('SWIM') ? 'text-cyan-400'
                                                         : block.activity.toUpperCase().includes('CYCLE') ? 'text-orange-400'
                                                             : block.activity.toUpperCase().includes('GYM') ? 'text-indigo-400'
                                                                 : 'text-emerald-400'
-                                                    : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
+                                                    : block.type === 'BILL' ? 'text-rose-400'
+                                                        : block.type === 'UNI_BILL' ? 'text-indigo-400'
+                                                            : getColorForType(block.type).replace('border-', 'text-').replace('-500', '-400')
                                                     }`}>
                                                     {block.type === 'FITNESS' ? (
                                                         block.activity.toUpperCase().includes('SWIM') ? <Waves className="w-4 h-4" /> :
@@ -498,8 +680,10 @@ export default function CommandCenter() {
                                                                 block.activity.toUpperCase().includes('GYM') ? <Dumbbell className="w-4 h-4" /> :
                                                                     <Footprints className="w-4 h-4" />
                                                     ) : block.type === 'COACHING' ? <UsersIcon className="w-4 h-4" />
-                                                        : block.type === 'HOLIDAY' ? <span className="text-sm">🌴</span>
-                                                            : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
+                                                        : block.type === 'BILL' ? <Banknote className="w-4 h-4" />
+                                                            : block.type === 'UNI_BILL' ? <Target className="w-4 h-4" />
+                                                                : block.type === 'HOLIDAY' ? <span className="text-sm">🌴</span>
+                                                                    : <div className="w-2.5 h-2.5 rounded-full bg-current opacity-50" />
                                                     }
                                                 </div>
                                                 <div className="flex-[0.3] min-w-[50px]">
@@ -526,17 +710,17 @@ export default function CommandCenter() {
                                             className="flex flex-col items-center justify-center py-6 bg-zinc-900/20 rounded-xl border border-zinc-800/30 border-dashed gap-3 cursor-pointer hover:bg-zinc-800/40 transition-colors"
                                         >
                                             <span className="text-xs text-zinc-600 font-medium">
-                                                {mergedScheduleData.length > 0 ? "No Priority Focus" : "Free Day"}
+                                                {calendarBlocks.dailyListview.length > 0 ? "No Priority Focus" : "Free Day"}
                                             </span>
                                             <button className="px-4 py-2 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-500/20 transition-all flex items-center gap-2 text-xs font-bold">
                                                 <Plus className="w-3.5 h-3.5" /> Quick Add
                                             </button>
                                         </div>
                                     )}
-                                    {scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length > 0 &&
-                                        scheduleData.length > Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3) ? (
+                                    {calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').length > 0 &&
+                                        calendarBlocks.dailyListview.length > Math.min(calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').length, 3) ? (
                                         <div onClick={() => setViewMode('day')} className="text-center text-xs text-zinc-500 pt-1 font-medium cursor-pointer hover:text-indigo-400 transition-colors">
-                                            +{scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)} more scheduled block{(scheduleData.length - Math.min(scheduleData.filter(b => b.is_priority || b.type === 'FITNESS').length, 3)) > 1 ? 's' : ''}
+                                            +{calendarBlocks.dailyListview.length - Math.min(calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').length, 3)} more scheduled block{(calendarBlocks.dailyListview.length - Math.min(calendarBlocks.dailyListview.filter(b => b.is_priority || b.type === 'FITNESS' || b.type === 'BILL' || b.type === 'UNI_BILL').length, 3)) > 1 ? 's' : ''}
                                         </div>
                                     ) : null}
                                 </div>
@@ -641,9 +825,15 @@ function CalendarGrid({ currentDate, monthData, holidaysData, onDateClick }: { c
         const hasHoliday = dayHolidays.length > 0;
         const isMercantileOrPoya = dayHolidays.some(h => h.categories.includes('Mercantile') || h.categories.includes('Poya'));
 
+        // Overdue Virtual Block Styling Check
+        const todayStr = formatDate(new Date());
+        const hasOverdueVirtualBlock = monthData.some(e => e.date === dateStr && (e.type === 'BILL' || e.type === 'UNI_BILL') && dateStr < todayStr && !e.completed);
+
         // Background Styling
         let bgStyle = 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800';
-        if (isCritical) {
+        if (hasOverdueVirtualBlock) {
+            bgStyle = 'bg-zinc-900/50 border-rose-500/80 shadow-[inset_0_0_10px_rgba(244,63,94,0.15)] ring-1 ring-rose-500/50';
+        } else if (isCritical) {
             bgStyle = 'bg-rose-900/20 border-rose-500/50 shadow-[0_0_10px_rgba(244,63,94,0.3)]';
         } else if (isToday) {
             bgStyle = 'bg-indigo-600/20 border-indigo-500';
@@ -657,6 +847,8 @@ function CalendarGrid({ currentDate, monthData, holidaysData, onDateClick }: { c
         const dayEvents = monthData.filter(e => e.date === dateStr);
         const hasRun = dayEvents.some(e => e.type === 'FITNESS');
         const hasCoaching = dayEvents.some(e => e.type === 'COACHING');
+        const hasBill = dayEvents.some(e => e.type === 'BILL');
+        const hasUniBill = dayEvents.some(e => e.type === 'UNI_BILL');
 
         days.push(
             <button
@@ -682,6 +874,12 @@ function CalendarGrid({ currentDate, monthData, holidaysData, onDateClick }: { c
                     {hasCoaching && (
                         <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                     )}
+                    {hasBill && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                    )}
+                    {hasUniBill && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                    )}
                 </div>
             </button>
         );
@@ -697,8 +895,8 @@ function CalendarGrid({ currentDate, monthData, holidaysData, onDateClick }: { c
     );
 }
 
-function ActivityBlock({ block, onCheck, onClick, isOverlapping = false }: { block: any, onCheck: (b: any) => void, onClick: () => void, isOverlapping?: boolean }) {
-    const isCheckable = block.type === 'COACHING' || block.type === 'FITNESS';
+function ActivityBlock({ block, onCheck, onClick, isOverlapping = false, isMutating = false }: { block: any, onCheck: (b: any) => void, onClick: () => void, isOverlapping?: boolean, isMutating?: boolean }) {
+    const isCheckable = block.type === 'COACHING' || block.type === 'FITNESS' || block.type === 'BILL' || block.type === 'UNI_BILL';
 
     let leftBorderColor = 'border-l-zinc-500';
     if (block.type === 'FITNESS') {
@@ -798,9 +996,15 @@ function ActivityBlock({ block, onCheck, onClick, isOverlapping = false }: { blo
             {isCheckable && (
                 <button
                     onClick={(e) => { e.stopPropagation(); onCheck(block); }}
+                    disabled={isMutating}
                     className={`w-8 h-8 rounded-full border-[2.5px] flex items-center justify-center transition-all z-20 shrink-0 shadow-inner
-                    ${block.completed ? 'bg-green-500 border-green-500 text-white' : 'border-zinc-500 bg-white/5 hover:border-zinc-300 hover:bg-white/10'}`}>
-                    <Check className={`w-5 h-5 text-white ${block.completed ? 'opacity-100' : 'opacity-0'}`} />
+                    ${block.completed ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-zinc-500 bg-white/5 hover:border-zinc-300 hover:bg-white/10'}
+                    ${isMutating ? 'opacity-50 cursor-wait' : ''}`}>
+                    {isMutating ? (
+                        <div className="w-4 h-4 rounded-full border-2 border-zinc-400 border-t-white animate-spin" />
+                    ) : (
+                        <Check className={`w-5 h-5 text-white ${block.completed ? 'opacity-100' : 'opacity-0'}`} />
+                    )}
                 </button>
             )}
         </div>
