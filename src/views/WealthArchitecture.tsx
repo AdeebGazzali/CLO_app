@@ -147,11 +147,7 @@ export default function WealthArchitecture() {
                 return todayStart >= dueDate;
             })
             .reduce((acc, r) => acc + Number(r.amount), 0);
-        // Safe Remaining Capital Calculation (Zero-Floor to prevent negative over-savings drift)
-        const unfulfilledUniCost = UNIVERSITY_PLANS[currentStats?.active_uni_plan || 'Plan 02']?.reduce((sum, inst, idx) => {
-            if (currentStats?.uni_installments_paid?.includes(idx)) return sum;
-            return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * (gbpRate || 385.0));
-        }, 0) || 0;
+        // Safe Remaining Capital Calculation is handled directly inside the calculateDynamicWaterfallRequirement engine lower down.
         setRecurringExpensesTotal(unpaidRecurringTotal);
         setRecurringExpensesList(activeRecurringList);
 
