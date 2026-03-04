@@ -1,7 +1,7 @@
-import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, Activity, PlusCircle, History, Trash2 } from 'lucide-react';
+import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Activity, PlusCircle, History, Trash2, Pencil, Filter } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { formatDate } from '../lib/utils';
+import { formatDate, getLocalISODate, getLocalISODateOffset } from '../lib/utils';
 import { executeRecurringPayment } from '../lib/billingEngine';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -77,7 +77,6 @@ export default function WealthArchitecture() {
     const [recurringExpensesTotal, setRecurringExpensesTotal] = useState<number>(0);
     const [recurringExpensesList, setRecurringExpensesList] = useState<RecurringExpense[]>([]);
     const [priorityExpenses, setPriorityExpenses] = useState<PriorityExpense[]>([]);
-    const [recentExpenses, setRecentExpenses] = useState<any[]>([]);
 
     // UI States
     const [loading, setLoading] = useState(true);
@@ -87,6 +86,27 @@ export default function WealthArchitecture() {
     const [isAddFundModalOpen, setIsAddFundModalOpen] = useState(false);
     const [isSweepModalOpen, setIsSweepModalOpen] = useState(false);
     const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
+    const [isLedgerFilterModalOpen, setIsLedgerFilterModalOpen] = useState(false);
+
+    // New Features States
+    const [transactionLedger, setTransactionLedger] = useState<any[]>([]);
+    const [isIncomeModalOpen, setIsIncomeModalOpen] = useState(false);
+    const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
+    const [withdrawAmount, setWithdrawAmount] = useState('');
+    const [isEditSalaryModalOpen, setIsEditSalaryModalOpen] = useState(false);
+    const [editSalaryAmount, setEditSalaryAmount] = useState('');
+    const [activelyUndoingIds, setActivelyUndoingIds] = useState<Set<string>>(new Set());
+
+    // Ledger Filter & Sort
+    const [ledgerTypeFilters, setLedgerTypeFilters] = useState<string[]>([]);
+    const [ledgerDateRange, setLedgerDateRange] = useState<'7d' | '30d' | '90d' | 'all'>('all');
+    const [ledgerSortAsc, setLedgerSortAsc] = useState<boolean>(false); // Default: newest first
+    const [displayLimit, setDisplayLimit] = useState<number>(10);
+
+    // Explicitly reset the load limit when the user clicks a sort/filter control
+    useEffect(() => {
+        setDisplayLimit(10);
+    }, [ledgerTypeFilters, ledgerDateRange, ledgerSortAsc]);
 
     // Sync Logic
     const fetchData = async () => {
@@ -205,14 +225,14 @@ export default function WealthArchitecture() {
             if (isTimedOut) return;
             if (priorities) setPriorityExpenses(priorities as PriorityExpense[]);
 
-            // 6. Fetch Recent Raw Expenses for Undo functionality
-            const { data: expenses } = await supabase.from('expenses')
+            // 6. Fetch Transaction Ledger (Replacing Recent Expenses)
+            const { data: transactions } = await supabase.from('wallet_history')
                 .select('*')
                 .eq('user_id', user.id)
                 .order('id', { ascending: false })
-                .limit(5);
+                .limit(150);
             if (isTimedOut) return;
-            if (expenses) setRecentExpenses(expenses);
+            if (transactions) setTransactionLedger(transactions);
 
             clearTimeout(timeoutId);
         } catch (err: any) {
@@ -224,7 +244,9 @@ export default function WealthArchitecture() {
         }
     };
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => {
+        fetchData();
+    }, []);
 
     // Core Algorithms: The Waterfall Engine
     const allPlanMetrics = useMemo(() => {
@@ -281,8 +303,9 @@ export default function WealthArchitecture() {
     // Total Liquid Assets (Physical Cash)
     const totalLiquidAssets = Math.max(0, Number(stats.wallet_balance)) + Math.max(0, Number(stats.wealth_uni_fund));
 
-    // Capabilities (Strict Monthly Cash Flow)
-    const monthlyCapability = Number(stats.wallet_balance) - activeDynamicRequirement - recurringExpensesTotal;
+    // Capabilities (Strict Monthly Cash Flow -> Master Pool)
+    const uniFundExcess = Math.max(0, Number(stats.wealth_uni_fund) - activeMonthlyRequirement);
+    const monthlyCapability = Number(stats.wallet_balance) + uniFundExcess - recurringExpensesTotal;
 
     // Smart Recommendation logic using static, non-circular baseline
     const staticPlanMonthlyRate = (planKey: string) => {
@@ -356,30 +379,272 @@ export default function WealthArchitecture() {
         }
     };
 
-    const handleUndoExpense = async (exp: any) => {
-        if (!window.confirm(`Undo logging of "${exp.reason}"? LKR ${exp.amount.toLocaleString()} will be refunded to your Operating Wallet.`)) return;
+    const handleUndoTransaction = async (tx: any) => {
+        if (!window.confirm(`Undo logging of "${tx.description}"? This will be recorded as a refund/reversal.`)) return;
+        if (activelyUndoingIds.has(tx.id)) return; // Prevent double trigger
 
+        setActivelyUndoingIds(prev => new Set(prev).add(tx.id));
         setLoading(true);
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            setActivelyUndoingIds(prev => { const n = new Set(prev); n.delete(tx.id); return n; });
+            setLoading(false);
+            return;
+        }
+
+        const { data: returnedCounterIds, error } = await supabase.rpc('undo_transaction_atomic', { p_tx_id: tx.id, p_date: getLocalISODate() });
+
+        if (error) {
+            alert(`Undo failed: ${error.message}`);
+            setActivelyUndoingIds(prev => { const n = new Set(prev); n.delete(tx.id); return n; });
+            setLoading(false);
+            return;
+        }
+
+        // Optimistic UI synchronization
+        setTransactionLedger(prevLedger => {
+            const nextLedger = [...prevLedger];
+
+            // Mark the origin transaction as reversed
+            const originIndex = nextLedger.findIndex(t => t.id === tx.id);
+            if (originIndex !== -1) nextLedger[originIndex] = { ...nextLedger[originIndex], is_reversed: true };
+
+            // Find and mark the exact sibling if it's a dual-leg transaction
+            if (tx.linked_tx_id) {
+                const siblingIndex = nextLedger.findIndex(t => String(t.id) === String(tx.linked_tx_id));
+                if (siblingIndex !== -1) {
+                    nextLedger[siblingIndex] = { ...nextLedger[siblingIndex], is_reversed: true };
+                }
+            }
+            return nextLedger;
+        });
+
+        // The RPC natively spawns new rows which we must ingest back into the list.
+        // We do a targeted SELECT against the returned IDs to avoid a full 150-row network payload
+        if (returnedCounterIds && returnedCounterIds.length > 0) {
+            const { data: newRows } = await supabase.from('wallet_history')
+                .select('*')
+                .in('id', returnedCounterIds)
+                .order('id', { ascending: false });
+
+            if (newRows) {
+                setTransactionLedger(prev => {
+                    const merged = [...newRows, ...prev];
+                    return merged.sort((a, b) => b.id - a.id); // Sort by id DESC
+                });
+
+                if (newRows.length > 0) {
+                    setStats(prev => ({
+                        ...prev,
+                        wallet_balance: newRows[0].wallet_balance_snapshot !== undefined ? newRows[0].wallet_balance_snapshot : prev.wallet_balance,
+                        wealth_uni_fund: newRows[0].fund_balance_snapshot !== undefined ? newRows[0].fund_balance_snapshot : prev.wealth_uni_fund
+                    }));
+                }
+            }
+        }
+
+        // We defer full fetchData since our targeted UI sync is extremely accurate,
+        // but it's safe to fetch User Stats natively just in case bounds drift.
+        const { data: statsData } = await supabase.from('user_stats').select('*').eq('user_id', user.id).single();
+        if (statsData) setStats(statsData as UserStats);
+
+        setActivelyUndoingIds(prev => { const n = new Set(prev); n.delete(tx.id); return n; });
+        setLoading(false);
+    };
+
+    const getTransactionMeta = (tx: any) => {
+        if (tx.type === 'IN' && tx.description?.startsWith('Coaching Income'))
+            return { label: 'COACHING', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
+        if (tx.type === 'IN' && tx.description?.startsWith('Salary'))
+            return { label: 'SALARY', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+        if (tx.type === 'IN' && tx.description?.startsWith('Refunded'))
+            return { label: 'REFUND', color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/20' };
+        if (tx.type === 'IN')
+            return { label: 'CREDIT', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
+        if (tx.type === 'OUT' && tx.description === 'Uni Fund Contribution')
+            return { label: 'FUND SWEEP', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
+        if (tx.type === 'FUND_IN')
+            return { label: 'FUND IN', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
+        if (tx.type === 'OUT')
+            return { label: 'EXPENSE', color: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/20' };
+        return { label: 'TRANSFER', color: 'text-zinc-400', bg: 'bg-zinc-500/10', border: 'border-zinc-500/20' };
+    };
+
+    const LEDGER_FILTERS: Record<string, (tx: any) => boolean> = {
+        'INCOME': tx => tx.amount > 0 && tx.type === 'IN',
+        'EXPENSE': tx => tx.type === 'OUT' && tx.description !== 'Uni Fund Contribution',
+        'SALARY': tx => tx.description?.startsWith('Salary'),
+        'COACHING': tx => tx.description?.startsWith('Coaching Income'),
+        'RECURRING': tx => tx.description?.startsWith('Recurring:'),
+        'UNI FUND': tx => tx.description === 'Uni Fund Contribution' ||
+            tx.description === 'Fund Withdrawal to Wallet' ||
+            tx.type === 'FUND_IN',
+        'REFUNDS': tx => tx.description?.startsWith('Refunded'),
+    };
+
+    const filteredLedger = useMemo(() => {
+        let result = [...transactionLedger].filter(tx => !tx.is_reversed);
+
+        // 1. Apply date range filter
+        if (ledgerDateRange !== 'all') {
+            const cutoffDays = ledgerDateRange === '7d' ? 7
+                : ledgerDateRange === '30d' ? 30
+                    : 90;
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - cutoffDays);
+            cutoff.setHours(0, 0, 0, 0);
+            result = result.filter(tx => new Date(tx.date) >= cutoff);
+        }
+
+        // 2. Apply type filters (OR logic — show transaction if it matches ANY active filter)
+        if (ledgerTypeFilters.length > 0) {
+            result = result.filter(tx =>
+                ledgerTypeFilters.some(filterKey => LEDGER_FILTERS[filterKey]?.(tx))
+            );
+        }
+
+        // 3. Apply sort direction
+        result.sort((a, b) => {
+            const diff = new Date(b.date).getTime() - new Date(a.date).getTime();
+            return ledgerSortAsc ? -diff : diff;
+        });
+
+        return result;
+    }, [transactionLedger, ledgerTypeFilters, ledgerDateRange, ledgerSortAsc]);
+
+    // Data Grouping & Normalization synchronously 
+    const groupedLedger = useMemo(() => {
+        const sliced = filteredLedger.slice(0, displayLimit);
+        const groups: { dateKey: string, entries: any[] }[] = [];
+
+        for (const tx of sliced) {
+            const dateKey = new Date(tx.date).toISOString().split('T')[0];
+            let group = groups.find(g => g.dateKey === dateKey);
+            if (!group) {
+                group = { dateKey, entries: [] };
+                groups.push(group);
+            }
+            group.entries.push(tx);
+        }
+        return groups;
+    }, [filteredLedger, displayLimit]);
+
+    const formatGroupHeader = (dateKey: string) => {
+        const todayStr = getLocalISODate();
+        const yesterday = getLocalISODateOffset(-1);
+
+        if (dateKey === todayStr) return "Today";
+        if (dateKey === yesterday) return "Yesterday";
+
+        return new Date(dateKey).toLocaleDateString('default', {
+            day: 'numeric', month: 'short', year: 'numeric'
+        });
+    };
+
+    // Minimum Tracking Math
+
+    // Dynamically find the first collection date from history (excluding reversed transactions)
+    const firstCollectionTx = transactionLedger && transactionLedger.length > 0
+        ? [...transactionLedger]
+            .filter(tx => (tx.description === 'Uni Fund Contribution' || tx.type === 'FUND_IN') && !tx.is_reversed)
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())[0]
+        : null;
+
+    // Use Feb 1, 2026 as an ultimate fallback if no history exists yet
+    const collectionStartDate = firstCollectionTx ? new Date(firstCollectionTx.date) : new Date('2026-02-01T00:00:00Z');
+
+    // Calculate months elapsed since saving started
+    // We add +1 because if they started this month, they are in month 1 of collection
+    const diffDaysSinceStart = (new Date().getTime() - collectionStartDate.getTime()) / (1000 * 3600 * 24);
+    const monthsElapsed = Math.max(1, Math.ceil(diffDaysSinceStart / 30.44));
+
+    const minimumExpectedFundBalance = activeMonthlyRequirement * monthsElapsed;
+
+    const maxWithdrawable = Math.max(0, Number(stats.wealth_uni_fund) - activeMonthlyRequirement);
+
+    const handleWithdrawFromFund = async (amount: number) => {
+        if (amount <= 0 || amount > maxWithdrawable) {
+            alert(`Invalid amount. Maximum withdrawable is LKR ${maxWithdrawable.toLocaleString()}.`);
+            return;
+        }
+
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        // Refund mathematically to Operational Wallet
-        const newWalletBal = Number(stats.wallet_balance) + Number(exp.amount);
-
-        // Reverse the database impact
-        await supabase.from('expenses').delete().eq('id', exp.id);
-        await supabase.from('user_stats').update({ wallet_balance: newWalletBal }).eq('user_id', user.id);
-
-        // Log the refund injection
-        await supabase.from('wallet_history').insert({
-            user_id: user.id,
-            amount: exp.amount,
-            description: `Refunded / Undid Logic: ${exp.reason}`,
-            date: formatDate(new Date()),
-            type: 'IN'
+        const { data: responsePayload, error } = await supabase.rpc('create_fund_withdrawal_atomic', {
+            p_amount: amount,
+            p_description: 'Fund Withdrawal to Wallet',
+            p_date: getLocalISODate()
         });
 
-        await fetchData();
+        if (error) {
+            console.error('RPC Error:', error);
+            alert('Withdrawal failed. Database logic error.');
+            return;
+        }
+
+        const { in_id, out_id, wallet_snapshot, fund_snapshot } = responsePayload as any;
+
+        // Optimistic State Sync from RPC Snapshot payload
+        setStats(prev => ({ ...prev, wealth_uni_fund: fund_snapshot, wallet_balance: wallet_snapshot }));
+
+        setTransactionLedger(prev => {
+            const newRows = [
+                { id: in_id, user_id: user.id, amount: amount, description: 'Fund Withdrawal to Wallet', date: getLocalISODate(), type: 'FUND_WITHDRAWAL_IN', linked_tx_id: out_id, is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot },
+                { id: out_id, user_id: user.id, amount: -amount, description: 'Fund Withdrawal to Wallet', date: getLocalISODate(), type: 'FUND_WITHDRAWAL_OUT', linked_tx_id: in_id, is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot }
+            ];
+            const merged = [...newRows, ...prev];
+            return merged.sort((a, b) => b.id - a.id);
+        });
+
+        setIsWithdrawModalOpen(false);
+        setWithdrawAmount('');
+    };
+
+    const handleLogIncome = async (amount: number, type: string, description: string, dateStr: string) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const fullDescription = type === 'Other' ? description : `${type}: ${description}`;
+
+        const { data: responsePayload, error } = await supabase.rpc('create_income_atomic', {
+            p_amount: amount,
+            p_description: fullDescription,
+            p_date: dateStr
+        });
+
+        if (error) {
+            console.error('RPC Error:', error);
+            alert('Failed to log income.');
+            return;
+        }
+
+        const { history_id, wallet_snapshot, fund_snapshot } = responsePayload as any;
+
+        setStats(prev => ({ ...prev, wallet_balance: wallet_snapshot }));
+        setTransactionLedger(prev => {
+            const newRow = { id: history_id, user_id: user.id, amount, description: fullDescription, date: dateStr, type: 'IN', is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot };
+            const merged = [newRow, ...prev];
+            return merged.sort((a, b) => b.id - a.id);
+        });
+
+        setIsIncomeModalOpen(false);
+    };
+
+    const handleUpdateSalary = async (newSalary: number) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { error } = await supabase.from('user_stats').update({ wallet_salary: newSalary }).eq('user_id', user.id);
+
+        if (!error) {
+            setStats(prev => ({ ...prev, wallet_salary: newSalary }));
+            setIsEditSalaryModalOpen(false);
+            setEditSalaryAmount('');
+        } else {
+            alert('Failed to update salary.');
+        }
     };
 
     if (loading && !fetchError) return <div className="text-zinc-500 text-center py-10 animate-pulse">Initializing Financial Engine...</div>;
@@ -399,10 +664,21 @@ export default function WealthArchitecture() {
                 <div>
                     <h2 className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-1">Operating Wallet</h2>
                     <div className="text-4xl font-black text-white italic tracking-tighter">LKR {Number(stats.wallet_balance).toLocaleString()}</div>
+                    <div className="mt-1 flex items-center gap-2">
+                        <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest pl-1">Base Salary: LKR {Number(stats.wallet_salary).toLocaleString()}</span>
+                        <button onClick={() => setIsEditSalaryModalOpen(true)} className="text-zinc-500 hover:text-emerald-400 transition-colors p-1" title="Edit Base Salary">
+                            <Pencil className="w-3 h-3" />
+                        </button>
+                    </div>
                 </div>
-                <button onClick={() => setIsExpModalOpen(true)} className="px-4 py-2 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold hover:bg-rose-500/20 transition-all flex items-center gap-1.5">
-                    <Banknote className="w-4 h-4" /> Expense
-                </button>
+                <div className="flex gap-2">
+                    <button onClick={() => setIsIncomeModalOpen(true)} className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl text-xs font-bold hover:bg-emerald-500/20 transition-all flex items-center gap-1.5">
+                        <TrendingUp className="w-4 h-4" /> Income
+                    </button>
+                    <button onClick={() => setIsExpModalOpen(true)} className="px-4 py-2 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded-xl text-xs font-bold hover:bg-rose-500/20 transition-all flex items-center gap-1.5">
+                        <Banknote className="w-4 h-4" /> Expense
+                    </button>
+                </div>
             </div>
 
             {/* University Plans Master UI */}
@@ -419,6 +695,20 @@ export default function WealthArchitecture() {
                         <div className="flex gap-2">
                             <button onClick={() => setIsAddFundModalOpen(true)} className="p-2 border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 rounded-xl hover:bg-emerald-500/20 transition-all" title="Add External Funds / Past Deposits">
                                 <PlusCircle className="w-5 h-5" />
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (maxWithdrawable <= 0) {
+                                        alert('Fund is at its minimum floor. No surplus available to withdraw.');
+                                        return;
+                                    }
+                                    setWithdrawAmount(String(maxWithdrawable));
+                                    setIsWithdrawModalOpen(true);
+                                }}
+                                className={`p-2 border rounded-xl transition-all ${maxWithdrawable > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20' : 'border-zinc-700/30 bg-zinc-800/20 text-zinc-600 cursor-not-allowed'}`}
+                                title={maxWithdrawable > 0 ? `Withdraw from Fund (Max: LKR ${maxWithdrawable.toLocaleString()})` : 'Fund at minimum floor — no withdrawal available'}
+                            >
+                                <ArrowLeft className="w-5 h-5" />
                             </button>
                             <button onClick={handlePayoutToFund} className="p-2 border border-indigo-500/30 bg-indigo-500/10 text-indigo-400 rounded-xl hover:bg-indigo-500/20 transition-all" title="Transfer Operating Surplus">
                                 <ArrowRight className="w-5 h-5" />
@@ -504,6 +794,22 @@ export default function WealthArchitecture() {
                                 }, 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
                         </div>
+                        <div className="bg-zinc-950/80 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs">
+                            <div>
+                                <span className="text-zinc-400 font-bold block">Minimum Fund Balance (Now)</span>
+                                <span className="text-[9px] text-zinc-600 block mt-0.5 font-normal">
+                                    Based on {monthsElapsed} month{monthsElapsed !== 1 ? 's' : ''} of collection @ LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
+                                </span>
+                            </div>
+                            <div className="text-right">
+                                <span className={`font-mono font-black text-sm ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                    LKR {minimumExpectedFundBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                </span>
+                                <span className={`ml-2 text-[9px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded border ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-500/80 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500/80 bg-rose-500/10 border-rose-500/20'}`}>
+                                    {Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'ON TRACK' : 'BEHIND'}
+                                </span>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="bg-black/30 rounded-xl p-4 border border-zinc-800/50 flex justify-between items-center">
@@ -587,9 +893,7 @@ export default function WealthArchitecture() {
                 <div className="space-y-3">
                     {priorityExpenses.map((expense) => {
                         // Explicit forecasting logic using a dedicated monthly savings rate
-                        const monthlySavingsRate = Number(stats.wallet_balance) > 0
-                            ? Math.max(0, Number(stats.wallet_salary) + recentVariableIncome - activeDynamicRequirement - recurringExpensesTotal)
-                            : 0;
+                        const monthlySavingsRate = Math.max(0, Number(stats.wallet_salary) + recentVariableIncome + uniFundExcess - recurringExpensesTotal);
 
                         const monthsNeeded = monthlySavingsRate > 0 ? (expense.amount / monthlySavingsRate) : Infinity;
                         const projectedDate = new Date();
@@ -691,42 +995,295 @@ export default function WealthArchitecture() {
                 </div>
             </div>
 
-            {/* Recent Expenses Log & Undo Layer */}
+            {/* Unified Financial Ledger */}
             <div className="mt-8">
                 <div className="flex items-center justify-between mb-4 px-1">
                     <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        <History className="w-4 h-4 text-zinc-400" /> Recent Logged Expenses
+                        <History className="w-4 h-4 text-zinc-400" /> Financial Transaction Ledger
                     </h3>
                 </div>
 
-                <div className="space-y-3">
-                    {recentExpenses.map(exp => (
-                        <div key={exp.id} className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/50 flex justify-between items-center transition-all">
-                            <div>
-                                <h4 className="font-bold text-zinc-300">{exp.reason}</h4>
-                                <span className="text-[10px] uppercase text-zinc-500 font-mono tracking-widest block">{exp.date}</span>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <span className="font-mono font-bold text-rose-400 opacity-90">
-                                    - LKR {exp.amount.toLocaleString()}
+                {/* Filter Row 1 */}
+                <div className="flex items-stretch justify-between mb-3 gap-2">
+                    <div className="flex gap-1.5 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
+                        {(['7d', '30d', '90d', 'all'] as const).map(range => (
+                            <button
+                                key={range}
+                                onClick={() => setLedgerDateRange(range)}
+                                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest transition-all ${ledgerDateRange === range
+                                    ? 'bg-zinc-700 text-white shadow-sm'
+                                    : 'bg-transparent text-zinc-500 hover:text-zinc-300'
+                                    }`}
+                            >
+                                {range === 'all' ? 'All Time' :
+                                    range === '7d' ? '7 Days' :
+                                        range === '30d' ? '30 Days' : '90 Days'}
+                            </button>
+                        ))}
+                    </div>
+
+                    <div className="flex items-stretch gap-2">
+                        <button
+                            onClick={() => setIsLedgerFilterModalOpen(true)}
+                            className="relative flex items-center gap-1.5 px-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition-all"
+                            title="Filter Ledger"
+                        >
+                            <Filter className="w-3 h-3" /> Filter
+                            {ledgerTypeFilters.length > 0 && (
+                                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 w-4 rounded-full bg-rose-500 border border-zinc-900 text-[9px] text-white font-black">
+                                    {ledgerTypeFilters.length}
                                 </span>
+                            )}
+                        </button>
+                        <button
+                            onClick={() => setLedgerSortAsc(prev => !prev)}
+                            className="flex items-center gap-1.5 px-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition-all"
+                            title={ledgerSortAsc ? 'Showing oldest first' : 'Showing newest first'}
+                        >
+                            {ledgerSortAsc
+                                ? <><ArrowUp className="w-3 h-3" /> Oldest</>
+                                : <><ArrowDown className="w-3 h-3" /> Newest</>
+                            }
+                        </button>
+                    </div>
+                </div>
+
+                {/* Ledger Filtering Modal */}
+                <AnimatePresence>
+                    {isLedgerFilterModalOpen && (
+                        <GenericModal onClose={() => setIsLedgerFilterModalOpen(false)} title="Filter Ledger">
+                            <div className="space-y-4">
+                                <div>
+                                    <span className="text-[10px] uppercase font-bold text-zinc-500 block mb-3">Transaction Types</span>
+                                    <div className="flex flex-wrap gap-2">
+                                        {Object.keys(LEDGER_FILTERS).map(filterKey => {
+                                            const isActive = ledgerTypeFilters.includes(filterKey);
+                                            const chipColorMap: Record<string, { active: string; inactive: string }> = {
+                                                'INCOME': { active: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'EXPENSE': { active: 'bg-rose-500/20 border-rose-500/40 text-rose-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'SALARY': { active: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'COACHING': { active: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'RECURRING': { active: 'bg-amber-500/20 border-amber-500/40 text-amber-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'UNI FUND': { active: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                                'REFUNDS': { active: 'bg-amber-500/20 border-amber-500/40 text-amber-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
+                                            };
+                                            return (
+                                                <button
+                                                    key={filterKey}
+                                                    onClick={() => setLedgerTypeFilters(prev =>
+                                                        prev.includes(filterKey)
+                                                            ? prev.filter(f => f !== filterKey)
+                                                            : [...prev, filterKey]
+                                                    )}
+                                                    className={`px-3 py-1.5 rounded-full text-xs font-black uppercase tracking-widest border transition-all ${isActive
+                                                        ? chipColorMap[filterKey].active
+                                                        : chipColorMap[filterKey].inactive
+                                                        }`}
+                                                >
+                                                    {filterKey}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                                {ledgerTypeFilters.length > 0 && (
+                                    <button
+                                        onClick={() => setLedgerTypeFilters([])}
+                                        className="w-full py-3 mt-2 bg-zinc-800/80 hover:bg-rose-500/20 text-zinc-300 hover:text-rose-400 border border-zinc-700 hover:border-rose-500/50 font-bold rounded-xl transition-all uppercase tracking-widest text-xs"
+                                    >
+                                        Clear Active Filters
+                                    </button>
+                                )}
                                 <button
-                                    onClick={() => handleUndoExpense(exp)}
-                                    className="p-1.5 text-zinc-500 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition-colors border border-transparent hover:border-rose-900/50"
-                                    title="Undo this deduction & refund the wallet"
+                                    onClick={() => setIsLedgerFilterModalOpen(false)}
+                                    className="w-full py-3 mt-2 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded-xl transition-all uppercase tracking-widest text-xs"
                                 >
-                                    <Trash2 className="w-4 h-4" />
+                                    Done
                                 </button>
+                            </div>
+                        </GenericModal>
+                    )}
+                </AnimatePresence>
+
+                {/* Results Summary Bar */}
+                <div className="flex items-center justify-between mb-4 px-1">
+                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">
+                        {filteredLedger.length} transaction{filteredLedger.length !== 1 ? 's' : ''}
+                        {ledgerTypeFilters.length > 0 || ledgerDateRange !== 'all'
+                            ? ' (filtered)'
+                            : ''}
+                    </span>
+                    {filteredLedger.length === 0 && transactionLedger.length > 0 && (
+                        <span className="text-[10px] text-zinc-600">
+                            No transactions match the active filters.
+                        </span>
+                    )}
+                </div>
+
+                <div className="space-y-0">
+                    {groupedLedger.map((group) => (
+                        <div key={group.dateKey}>
+                            <div className="mt-4 mb-2 py-2 border-b border-zinc-800/50">
+                                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-widest">
+                                    {formatGroupHeader(group.dateKey)}
+                                </span>
+                            </div>
+                            <div className="space-y-2">
+                                {group.entries.map((tx: any) => {
+                                    const meta = getTransactionMeta(tx);
+                                    return (
+                                        <div key={tx.id} className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-900/40 flex justify-between items-center transition-all hover:bg-zinc-900/60">
+                                            <div className="min-w-0 pr-4 flex flex-col justify-center">
+                                                <h4 className="font-bold text-zinc-300 truncate text-sm leading-tight">{tx.description}</h4>
+                                                <div className="flex items-center mt-1.5">
+                                                    <span className={`shrink-0 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${meta.bg} ${meta.color} ${meta.border}`}>
+                                                        {meta.label}
+                                                    </span>
+                                                    <span className="text-[10px] text-zinc-600 font-mono tracking-widest ml-2 truncate">
+                                                        {formatDate(new Date(tx.date))}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="shrink-0 text-right flex flex-col justify-center items-end">
+                                                <div className="flex items-center gap-2">
+                                                    <span className={`font-mono font-bold tracking-tight ${tx.amount > 0 ? 'text-emerald-400' : tx.amount < 0 ? 'text-rose-400' : 'text-zinc-300'}`}>
+                                                        {tx.amount > 0 ? '+' : tx.amount < 0 ? '−' : ''} LKR {Math.abs(tx.amount).toLocaleString()}
+                                                    </span>
+                                                    {!tx.is_reversed && tx.type !== 'FUND_OUT' && tx.type !== 'FUND_SWEEP_IN' && tx.type !== 'FUND_WITHDRAWAL_OUT' && tx.type !== 'LEGACY_MIGRATION' && !activelyUndoingIds.has(tx.id) && (
+                                                        <button
+                                                            onClick={() => handleUndoTransaction(tx)}
+                                                            className="p-1.5 text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition-colors border border-transparent hover:border-rose-900/50"
+                                                            title="Undo this transaction"
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                                <div className="text-[10px] font-mono font-bold text-zinc-500 mt-0.5" title="Running Balance (Operating Wallet)">
+                                                    Bal: LKR {Number(tx.wallet_balance_snapshot || 0).toLocaleString()}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
                     ))}
-                    {recentExpenses.length === 0 && (
-                        <div className="text-center py-6 border border-dashed border-zinc-800 rounded-xl text-zinc-600 text-[10px] uppercase tracking-widest font-bold">
-                            No recent transactions found.
+                    {transactionLedger.length === 0 && (
+                        <div className="text-center py-6 border border-dashed border-zinc-800 rounded-xl text-zinc-600 text-[10px] uppercase tracking-widest font-bold mt-4">
+                            No ledger history found.
+                        </div>
+                    )}
+
+                    {displayLimit < filteredLedger.length && (
+                        <div className="pt-6 pb-2">
+                            <button
+                                onClick={() => setDisplayLimit(prev => Math.min(prev + 10, filteredLedger.length))}
+                                className="w-full py-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-all uppercase tracking-widest"
+                            >
+                                Load 10 more
+                            </button>
                         </div>
                     )}
                 </div>
             </div>
+
+            {/* Income Logging Modal */}
+            <AnimatePresence>
+                {isIncomeModalOpen && (
+                    <GenericModal onClose={() => setIsIncomeModalOpen(false)} title="Log Income">
+                        <form onSubmit={(e) => {
+                            e.preventDefault();
+                            const fd = new FormData(e.currentTarget);
+                            const amount = Number(fd.get('amount'));
+                            const type = fd.get('type') as string;
+                            const desc = fd.get('description') as string;
+                            const dateStr = fd.get('date') as string;
+                            if (amount > 0 && desc && dateStr) {
+                                handleLogIncome(amount, type, desc, dateStr);
+                            }
+                        }} className="space-y-4">
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">Amount (LKR)</label>
+                                <input type="number" name="amount" required min="1" className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none" placeholder="0" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">Income Type</label>
+                                <select name="type" required className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none">
+                                    <option value="Salary">Salary</option>
+                                    <option value="Coaching Income">Coaching Income</option>
+                                    <option value="Other">Other</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">Description</label>
+                                <input type="text" name="description" required className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none" placeholder="e.g. February Salary" />
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">Date</label>
+                                <input type="date" name="date" required defaultValue={getLocalISODate()} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none" />
+                            </div>
+                            <button type="submit" className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition">
+                                Add to Wallet
+                            </button>
+                        </form>
+                    </GenericModal>
+                )}
+            </AnimatePresence>
+
+            {/* Salary Edit Modal */}
+            <AnimatePresence>
+                {isEditSalaryModalOpen && (
+                    <GenericModal onClose={() => setIsEditSalaryModalOpen(false)} title="Update Baseline Salary">
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">Expected Monthly Salary (LKR)</label>
+                                <input type="number" value={editSalaryAmount} onChange={e => setEditSalaryAmount(e.target.value)} min="1" className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none" placeholder={String(stats.wallet_salary)} />
+                                <p className="text-[10px] text-zinc-500 mt-2">This is used exclusively for priority forecasting and architecture capability metrics. Updating this does NOT add money to your wallet.</p>
+                            </div>
+                            <button onClick={() => handleUpdateSalary(Number(editSalaryAmount))} disabled={!editSalaryAmount || Number(editSalaryAmount) <= 0} className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold rounded-xl transition">
+                                Save Salary Setting
+                            </button>
+                        </div>
+                    </GenericModal>
+                )}
+            </AnimatePresence>
+
+            {/* Fund Withdrawal Modal */}
+            <AnimatePresence>
+                {isWithdrawModalOpen && (
+                    <GenericModal onClose={() => setIsWithdrawModalOpen(false)} title="Withdraw University Surplus">
+                        <div className="space-y-4">
+                            <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl flex gap-3 text-amber-500">
+                                <AlertTriangle className="w-5 h-5 shrink-0" />
+                                <p className="text-xs">
+                                    You are moving funds out of the protected Master Pool back into your Operating Wallet. You can only withdraw excess capital above the required baseline.
+                                </p>
+                            </div>
+                            <div>
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 block mb-1">
+                                    Amount to Withdraw (Max: LKR {maxWithdrawable.toLocaleString()})
+                                </label>
+                                <input
+                                    type="number"
+                                    value={withdrawAmount}
+                                    onChange={e => setWithdrawAmount(e.target.value)}
+                                    max={maxWithdrawable}
+                                    className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-amber-500 outline-none"
+                                    placeholder="0"
+                                />
+                            </div>
+                            <button
+                                onClick={() => handleWithdrawFromFund(Number(withdrawAmount))}
+                                disabled={!withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > maxWithdrawable}
+                                className="w-full py-4 mt-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl transition disabled:opacity-50"
+                            >
+                                Withdraw to Wallet
+                            </button>
+                        </div>
+                    </GenericModal>
+                )}
+            </AnimatePresence>
 
             {/* General Expense Logging Modal */}
             <AnimatePresence>
@@ -734,24 +1291,31 @@ export default function WealthArchitecture() {
                     <GenericModal onClose={() => setIsExpModalOpen(false)} title="Log General Expense">
                         <ExpenseForm
                             onSave={async (amount, reason) => {
-                                if (amount <= 0 || amount > Number(stats.wallet_balance)) {
-                                    alert(`Invalid amount. Must be between 1 and LKR ${Number(stats.wallet_balance).toLocaleString()}.`);
-                                    return;
-                                }
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
-                                const { error } = await supabase.rpc('deduct_expense_atomic', { p_user_id: user.id, p_amount: amount });
+                                const { data: responsePayload, error } = await supabase.rpc('create_expense_atomic', {
+                                    p_amount: amount,
+                                    p_description: reason,
+                                    p_category: 'General',
+                                    p_date: getLocalISODate()
+                                });
+
                                 if (error) {
                                     console.error('RPC Error:', error);
-                                    alert('Transaction failed. Database logic error.');
+                                    alert(`Transaction failed: ${error.message}`);
                                     return;
                                 }
 
-                                await supabase.from('expenses').insert({ user_id: user.id, amount, reason, date: formatDate(new Date()) });
-                                await supabase.from('wallet_history').insert({ user_id: user.id, amount: -amount, description: reason, date: formatDate(new Date()), type: 'OUT' });
+                                const { history_id, expense_id, wallet_snapshot, fund_snapshot } = responsePayload as any;
 
-                                await fetchData();
+                                setStats(prev => ({ ...prev, wallet_balance: wallet_snapshot }));
+                                setTransactionLedger(prev => {
+                                    const newRow = { id: history_id, user_id: user.id, amount: -amount, description: reason, date: getLocalISODate(), type: 'OUT', linked_expense_id: expense_id, is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot };
+                                    const merged = [newRow, ...prev];
+                                    return merged.sort((a, b) => b.id - a.id);
+                                });
+
                                 setIsExpModalOpen(false);
                             }}
                         />
@@ -769,9 +1333,7 @@ export default function WealthArchitecture() {
                                 if (!user) return;
 
                                 // Risk Validation upfront
-                                const monthlySavingsRate = Number(stats.wallet_balance) > 0
-                                    ? Math.max(0, Number(stats.wallet_salary) + recentVariableIncome - activeDynamicRequirement - recurringExpensesTotal)
-                                    : 0;
+                                const monthlySavingsRate = Math.max(0, Number(stats.wallet_salary) + recentVariableIncome + uniFundExcess - recurringExpensesTotal);
                                 const monthsNeeded = monthlySavingsRate > 0 ? (amount / monthlySavingsRate) : Infinity;
                                 const trgt = new Date(dateStr);
                                 const today = new Date();
@@ -829,25 +1391,31 @@ export default function WealthArchitecture() {
                         <FundSweepForm
                             maxAmount={Number(stats.wallet_balance)}
                             onSave={async (amountToTransfer) => {
-                                const newWalletBal = Number(stats.wallet_balance) - amountToTransfer;
-                                const newUniFund = Number(stats.wealth_uni_fund) + amountToTransfer;
-                                const prevWallet = stats.wallet_balance;
-                                const prevUniFund = stats.wealth_uni_fund;
-
-                                setStats(prev => ({ ...prev, wallet_balance: newWalletBal, wealth_uni_fund: newUniFund }));
-
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
-                                const { error } = await supabase.from('user_stats').update({ wallet_balance: newWalletBal, wealth_uni_fund: newUniFund }).eq('user_id', user.id);
+                                const { data: responsePayload, error } = await supabase.rpc('create_fund_sweep_atomic', {
+                                    p_amount: amountToTransfer,
+                                    p_description: 'Uni Fund Contribution',
+                                    p_date: getLocalISODate()
+                                });
+
                                 if (error) {
-                                    setStats(prev => ({ ...prev, wallet_balance: prevWallet, wealth_uni_fund: prevUniFund }));
-                                    alert("Transfer failed. Please try again.");
+                                    console.error('RPC Error:', error);
+                                    alert(`Transfer failed: ${error.message}`);
                                     return;
                                 }
 
-                                await supabase.from('wallet_history').insert({
-                                    user_id: user.id, date: formatDate(new Date()), amount: -amountToTransfer, description: 'Uni Fund Contribution', type: 'OUT'
+                                const { out_id, in_id, wallet_snapshot, fund_snapshot } = responsePayload as any;
+
+                                setStats(prev => ({ ...prev, wallet_balance: wallet_snapshot, wealth_uni_fund: fund_snapshot }));
+                                setTransactionLedger(prev => {
+                                    const newRows = [
+                                        { id: out_id, user_id: user.id, amount: -amountToTransfer, description: 'Uni Fund Contribution', date: getLocalISODate(), type: 'FUND_SWEEP_OUT', linked_tx_id: in_id, is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot },
+                                        { id: in_id, user_id: user.id, amount: amountToTransfer, description: 'Uni Fund Contribution', date: getLocalISODate(), type: 'FUND_SWEEP_IN', linked_tx_id: out_id, is_reversed: false, wallet_balance_snapshot: wallet_snapshot, fund_balance_snapshot: fund_snapshot }
+                                    ];
+                                    const merged = [...newRows, ...prev];
+                                    return merged.sort((a, b) => b.id - a.id);
                                 });
 
                                 setIsSweepModalOpen(false);
@@ -1037,7 +1605,7 @@ function PriorityForm({ onSave }: { onSave: (title: string, amount: number, date
 
 function AddFundForm({ onSave }: { onSave: (amount: number, dateStr: string, source: string) => Promise<void> }) {
     const [amount, setAmount] = useState('');
-    const [date, setDate] = useState(formatDate(new Date()));
+    const [date, setDate] = useState(getLocalISODate());
     const [source, setSource] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1127,7 +1695,7 @@ function RecurringExpForm({
     const [editingId, setEditingId] = useState<string | null>(null);
     const [title, setTitle] = useState('');
     const [amount, setAmount] = useState('');
-    const [firstDueDate, setFirstDueDate] = useState(formatDate(new Date()));
+    const [firstDueDate, setFirstDueDate] = useState(getLocalISODate());
     const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annually'>('monthly');
     const [period, setPeriod] = useState('0'); // 0 means infinite
     const [customPeriod, setCustomPeriod] = useState('');
@@ -1177,7 +1745,7 @@ function RecurringExpForm({
 
     const cancelEdit = () => {
         setEditingId(null);
-        setTitle(''); setAmount(''); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly'); setInjectToCalendar(true);
+        setTitle(''); setAmount(''); setFirstDueDate(getLocalISODate()); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly'); setInjectToCalendar(true);
     };
 
     return (
@@ -1285,7 +1853,7 @@ function RecurringExpForm({
                             } else {
                                 await onSave(title, Number(amount), firstDueDate, billingFrequency, Number(period) || 0, isAutomatic, injectToCalendar);
                             }
-                            setIsSubmitting(false); setFirstDueDate(formatDate(new Date())); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
+                            setIsSubmitting(false); setFirstDueDate(getLocalISODate()); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
                         }
                         setIsSubmitting(false);
                     }}

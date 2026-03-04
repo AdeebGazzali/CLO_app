@@ -2,6 +2,13 @@
 
 export const generateId = () => Math.random().toString(36).substr(2, 9);
 export const getDayName = (dateStr: string) => new Date(dateStr).toLocaleDateString('en-US', { weekday: 'long' });
+export const getLocalISODate = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Colombo' });
+export const getLocalISODateOffset = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return d.toLocaleDateString('en-CA', { timeZone: 'Asia/Colombo' });
+};
+
 export const formatDate = (date: Date) => {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
