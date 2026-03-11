@@ -381,6 +381,11 @@ export default function CommandCenter() {
             }
         }
 
+        // Populate client meta for coaching regardless of new or edit mode
+        if (formData.type === 'COACHING' && formData.clientName) {
+            formData.meta = { ...(formData.meta || {}), client: formData.clientName };
+        }
+
         if (editingEvent) {
             if (editScope === 'future' && editingEvent.series_id) {
                 await supabase.from('events').update({
@@ -404,11 +409,6 @@ export default function CommandCenter() {
                 }).eq('id', editingEvent.id);
             }
         } else {
-            // Add client meta for coaching
-            if (formData.type === 'COACHING' && formData.clientName) {
-                formData.meta = { client: formData.clientName };
-            }
-
             const payloads = generateRecurrencePayloads(formData, user.id, formData.recurrence, formData.recurrenceInterval, formData.endDate, formData.customDays);
             const { data: insertedData, error } = await supabase.from('events').insert(payloads).select();
 

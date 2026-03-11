@@ -1,5 +1,6 @@
-const fs = require('fs');
-const { createClient } = require('@supabase/supabase-js');
+import fs from 'fs';
+import { createClient } from '@supabase/supabase-js';
+
 const supabase = createClient('https://oejmnbesyzixxwikvzeu.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9lam1uYmVzeXppeHh3aWt2emV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzE0ODQ1MTEsImV4cCI6MjA4NzA2MDUxMX0.-xIDTf3CynQGRNRtOQAclCU32yeIQfObDR3KsW6XH74');
 
 async function run() {
@@ -27,7 +28,6 @@ async function run() {
             if (t === 'FUND_IN' || t === 'FUND_SWEEP_IN') f_sum += a;
             else if (t === 'FUND_OUT' || t === 'FUND_WITHDRAWAL_OUT') f_sum -= a;
 
-            output.push(`[${r.id} ${t}] ${a} | W: ${r_sum} | F: ${f_sum} | snapW: ${r.wallet_balance_snapshot}`);
         });
 
         output.push('Count of Legacy IN: ' + count);

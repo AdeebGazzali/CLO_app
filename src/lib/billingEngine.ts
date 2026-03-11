@@ -1,17 +1,6 @@
 import { supabase } from './supabaseClient';
 import { formatDate } from './utils';
-export interface RecurringExpense {
-    id: string;
-    title: string;
-    amount: number;
-    billing_frequency: 'monthly' | 'annually';
-    is_automatic: boolean;
-    inject_to_calendar: boolean;
-    anchor_day: number;
-    next_due_date: string;
-    end_date: string | null;
-    created_at: string;
-}
+import { RecurringExpense } from '../types/wealth';
 
 /**
  * Shared utility to handle the execution of a recurring bill.
@@ -20,6 +9,15 @@ export interface RecurringExpense {
  */
 export async function executeRecurringPayment(exp: RecurringExpense, user_id: string): Promise<{ success: boolean; error?: string }> {
     try {
+        // 0. Completion Guard
+        if (
+          exp.is_complete ||
+          (exp.total_installments !== null &&
+           exp.installments_paid >= exp.total_installments)
+        ) {
+          return { success: false, error: 'Subscription is already complete.' };
+        }
+
         // 1. Calculate the NEW next due date properly based on anchor_day
         const currentDueDate = new Date(exp.next_due_date);
         let newYear = currentDueDate.getFullYear();
@@ -75,6 +73,14 @@ export async function executeRecurringPayment(exp: RecurringExpense, user_id: st
                 .eq('id', exp.id);
         }
 
+        // 2b. Increment installments_paid
+        if (exp.total_installments !== null) {
+          await supabase
+            .from('recurring_expenses')
+            .update({ installments_paid: exp.installments_paid + 1 })
+            .eq('id', exp.id);
+        }
+
         // 4. Logging & Deductions
         // Log into standard expenses so it shows in "Recent Logged Expenses"
         await supabase.from('expenses').insert({
@@ -90,7 +96,8 @@ export async function executeRecurringPayment(exp: RecurringExpense, user_id: st
             amount: -exp.amount,
             description: `Paid Recurring: ${exp.title}`,
             date: formatDate(new Date()),
-            type: 'OUT'
+            type: 'OUT',
+            recurring_expense_id: exp.id
         });
 
         // Deduct from Operating Wallet

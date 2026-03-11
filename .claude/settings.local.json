@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /c/Users/adeeb/Projects/CLO_app -maxdepth 2 -type f -name \"*.ts\" -o -name \"*.tsx\" -o -name \"*.json\" -o -name \"*.html\" 2>/dev/null | head -50)"
+    ]
+  }
+}

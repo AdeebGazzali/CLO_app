@@ -1,80 +1,66 @@
-import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Activity, PlusCircle, History, Trash2, Pencil, Filter } from 'lucide-react';
+import { TrendingUp, Target, AlertTriangle, ListPlus, Banknote, CheckCircle2, ArrowRight, ArrowLeft, Activity, PlusCircle, Pencil } from 'lucide-react';
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabaseClient';
-import { formatDate, getLocalISODate, getLocalISODateOffset } from '../lib/utils';
+import { formatDate, getLocalISODate } from '../lib/utils';
 import { executeRecurringPayment } from '../lib/billingEngine';
-import { motion, AnimatePresence } from 'framer-motion';
+import { AnimatePresence } from 'framer-motion';
 
-// Types
-interface UserStats {
-    wallet_balance: number;
-    wallet_salary: number;
-    wealth_uni_fund: number;
-    wealth_uni_target: number;
-    active_uni_plan: string;
-    uni_installments_paid: number[];
-}
+import TransactionLedger, { LEDGER_FILTERS } from '../components/TransactionLedger';
+import GenericModal from '../components/modals/GenericModal';
+import ExpenseForm from '../components/modals/ExpenseForm';
+import PriorityForm from '../components/modals/PriorityForm';
+import AddFundForm from '../components/modals/AddFundForm';
+import FundSweepForm from '../components/modals/FundSweepForm';
+import RecurringExpForm from '../components/modals/RecurringExpForm';
+import RecurringDetailModal from '../components/modals/RecurringDetailModal';
 
-interface PriorityExpense {
-    id: string;
-    title: string;
-    amount: number;
-    target_date: string;
-    is_fulfilled: boolean;
-}
+import { UserStats, Transaction, PriorityExpense, RecurringExpense } from '../types/wealth';
 
-interface RecurringExpense {
-    id: string;
-    title: string;
-    amount: number;
-    billing_frequency: 'monthly' | 'annually';
-    is_automatic: boolean;
-    inject_to_calendar: boolean;
-    anchor_day: number;
-    next_due_date: string;
-    end_date: string | null;
-    created_at: string;
-}
+
 
 // Plan Configurations
-export const UNIVERSITY_PLANS: Record<string, { amountGbp?: number, amountLkr?: number, deadline: Date }[]> = {
+export const UNIVERSITY_PLANS: Record<string, { id: string, amountGbp?: number, amountLkr?: number, deadline: Date }[]> = {
     'Plan 01': [
-        { amountLkr: 549000, deadline: new Date('2026-09-25T00:00:00Z') },
-        { amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') }
+        { id: 'p01_inst_01', amountLkr: 549000, deadline: new Date('2026-09-25T00:00:00Z') },
+        { id: 'p01_inst_02', amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') }
     ],
     'Plan 02': [
-        { amountLkr: 194000, deadline: new Date('2026-09-25T00:00:00Z') },
-        { amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') },
-        { amountLkr: 194000, deadline: new Date('2027-01-25T00:00:00Z') },
-        { amountLkr: 194000, deadline: new Date('2027-03-25T00:00:00Z') }
+        { id: 'p02_inst_01', amountLkr: 194000, deadline: new Date('2026-09-25T00:00:00Z') },
+        { id: 'p02_inst_02', amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') },
+        { id: 'p02_inst_03', amountLkr: 194000, deadline: new Date('2027-01-25T00:00:00Z') },
+        { id: 'p02_inst_04', amountLkr: 194000, deadline: new Date('2027-03-25T00:00:00Z') }
     ],
     'Plan 03': [
-        { amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2026-09-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2026-10-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2026-11-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2026-12-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2027-01-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2027-02-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2027-03-25T00:00:00Z') },
-        { amountLkr: 75000, deadline: new Date('2027-04-25T00:00:00Z') },
+        { id: 'p03_inst_01', amountGbp: 600, deadline: new Date('2026-09-25T00:00:00Z') },
+        { id: 'p03_inst_02', amountLkr: 75000, deadline: new Date('2026-09-25T00:00:00Z') },
+        { id: 'p03_inst_03', amountLkr: 75000, deadline: new Date('2026-10-25T00:00:00Z') },
+        { id: 'p03_inst_04', amountLkr: 75000, deadline: new Date('2026-11-25T00:00:00Z') },
+        { id: 'p03_inst_05', amountLkr: 75000, deadline: new Date('2026-12-25T00:00:00Z') },
+        { id: 'p03_inst_06', amountLkr: 75000, deadline: new Date('2027-01-25T00:00:00Z') },
+        { id: 'p03_inst_07', amountLkr: 75000, deadline: new Date('2027-02-25T00:00:00Z') },
+        { id: 'p03_inst_08', amountLkr: 75000, deadline: new Date('2027-03-25T00:00:00Z') },
+        { id: 'p03_inst_09', amountLkr: 75000, deadline: new Date('2027-04-25T00:00:00Z') }
     ]
 };
+
+// Headroom buffer: a plan is only recommended if monthly capacity exceeds its
+// requirement by this margin, preventing razor-thin coverage recommendations.
+const PLAN_RECOMMENDATION_BUFFER_LKR = 10000;
 
 export default function WealthArchitecture() {
     const [stats, setStats] = useState<UserStats>({
         wallet_balance: 0,
         wallet_salary: 46775,
         wealth_uni_fund: 0,
-        wealth_uni_target: 800000,
         active_uni_plan: 'Plan 02',
         uni_installments_paid: []
     });
 
     const [gbpRate, setGbpRate] = useState<number>(385.0); // Fallback
-    const [gbpRateIsLive, setGbpRateIsLive] = useState<boolean>(true);
+    const [gbpRateIsLive, setGbpRateIsLive] = useState<boolean>(false);
     const [recentVariableIncome, setRecentVariableIncome] = useState<number>(0);
     const [recurringExpensesTotal, setRecurringExpensesTotal] = useState<number>(0);
+    const [proratedRecurringTotal, setProratedRecurringTotal] = useState<number>(0);
     const [recurringExpensesList, setRecurringExpensesList] = useState<RecurringExpense[]>([]);
     const [priorityExpenses, setPriorityExpenses] = useState<PriorityExpense[]>([]);
 
@@ -89,13 +75,14 @@ export default function WealthArchitecture() {
     const [isLedgerFilterModalOpen, setIsLedgerFilterModalOpen] = useState(false);
 
     // New Features States
-    const [transactionLedger, setTransactionLedger] = useState<any[]>([]);
+    const [transactionLedger, setTransactionLedger] = useState<Transaction[]>([]);
     const [isIncomeModalOpen, setIsIncomeModalOpen] = useState(false);
     const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
     const [withdrawAmount, setWithdrawAmount] = useState('');
     const [isEditSalaryModalOpen, setIsEditSalaryModalOpen] = useState(false);
     const [editSalaryAmount, setEditSalaryAmount] = useState('');
     const [activelyUndoingIds, setActivelyUndoingIds] = useState<Set<string>>(new Set());
+    const [selectedRecurringExp, setSelectedRecurringExp] = useState<RecurringExpense | null>(null);
 
     // Ledger Filter & Sort
     const [ledgerTypeFilters, setLedgerTypeFilters] = useState<string[]>([]);
@@ -157,34 +144,47 @@ export default function WealthArchitecture() {
                         rate: rateData.rates.LKR,
                         fetchedAt: new Date().toISOString()
                     }));
+                    // D3: Persist confirmed rate to Supabase for cross-device fallback
+                    await supabase
+                        .from('user_stats')
+                        .update({ last_gbp_rate: rateData.rates.LKR })
+                        .eq('user_id', user.id);
                 }
             } catch (e) {
                 console.error("Exchange API failed, using fallback.");
-                const cached = localStorage.getItem('cached_gbp_rate');
-                if (cached) {
-                    const { rate, fetchedAt } = JSON.parse(cached);
-                    setGbpRate(rate);
+                // D3: Fallback priority: 1) Supabase last_gbp_rate, 2) localStorage, 3) hardcoded
+                if (currentStats?.last_gbp_rate) {
+                    setGbpRate(currentStats.last_gbp_rate);
                     setGbpRateIsLive(false);
-                    const ageHours = (Date.now() - new Date(fetchedAt).getTime()) / 36e5;
-                    if (ageHours > 24) console.warn(`GBP rate is ${ageHours.toFixed(0)}hrs old`);
                 } else {
-                    setGbpRate(385.0);
-                    setGbpRateIsLive(false);
+                    const cached = localStorage.getItem('cached_gbp_rate');
+                    if (cached) {
+                        const { rate, fetchedAt } = JSON.parse(cached);
+                        setGbpRate(rate);
+                        setGbpRateIsLive(false);
+                        const ageHours = (Date.now() - new Date(fetchedAt).getTime()) / 36e5;
+                        if (ageHours > 24) console.warn(`GBP rate is ${ageHours.toFixed(0)}hrs old`);
+                    } else {
+                        setGbpRate(385.0);
+                        setGbpRateIsLive(false);
+                    }
                 }
             }
             if (isTimedOut) return;
 
-            // 3. Fetch Variables (Last 6 Coaching Payouts for Average)
+            // 3. Fetch Variable Income (Trailing 90-day window for coaching payouts)
+            const ninetyDaysAgo = new Date();
+            ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
             const { data: recentPayouts } = await supabase.from('wallet_history')
                 .select('amount')
                 .eq('user_id', user.id)
                 .eq('type', 'IN')
                 .like('description', 'Coaching Income:%')
-                .order('id', { ascending: false })
-                .limit(6);
+                .gte('date', ninetyDaysAgo.toISOString().split('T')[0]);
 
             const recentInc = recentPayouts?.length
-                ? recentPayouts.reduce((s, p) => s + Number(p.amount), 0) / recentPayouts.length
+                ? recentPayouts.reduce((s, p) => s + Number(p.amount), 0) / 3
                 : 0;
             setRecentVariableIncome(recentInc);
             if (isTimedOut) return;
@@ -195,7 +195,8 @@ export default function WealthArchitecture() {
                 .eq('user_id', user.id);
             if (isTimedOut) return;
 
-            const activeRecurringList = (recurring || []) as RecurringExpense[];
+            const allRecurringList = (recurring || []) as RecurringExpense[];
+            const activeRecurringList = allRecurringList.filter(r => !r.is_complete);
 
             // Calculate upcoming total dynamically for capability engine (looking ahead to the next 25th)
             const today = new Date();
@@ -212,8 +213,21 @@ export default function WealthArchitecture() {
                 })
                 .reduce((acc, r) => acc + Number(r.amount), 0);
 
+            // Prorated amounts — used exclusively for monthlyCapability and monthlySavingsRate
+            const upcomingProratedTotal = activeRecurringList
+                .filter(r => {
+                    const dueDate = new Date(r.next_due_date);
+                    dueDate.setHours(0, 0, 0, 0);
+                    return dueDate <= nextMilestoneDate;
+                })
+                .reduce((acc, r) => {
+                    const amount = r.billing_frequency === 'annually' ? r.amount / 12 : r.amount;
+                    return acc + Number(amount);
+                }, 0);
+
             // Safe Remaining Capital Calculation is handled directly inside the calculateDynamicWaterfallRequirement engine lower down.
             setRecurringExpensesTotal(upcomingRecurringTotal);
+            setProratedRecurringTotal(upcomingProratedTotal);
             setRecurringExpensesList(activeRecurringList);
 
             // 5. Fetch Priority Goals
@@ -253,22 +267,20 @@ export default function WealthArchitecture() {
         const calculateDynamicWaterfallRequirement = (planKey: string) => {
             // Include original index before any sorting/filtering to check if paid
             const planInsts = UNIVERSITY_PLANS[planKey] || [];
-            const mappedInsts = planInsts.map((inst, idx) => ({ ...inst, originalIndex: idx }));
-            const installments = [...mappedInsts].sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
+            const installments = [...planInsts].sort((a, b) => a.deadline.getTime() - b.deadline.getTime());
 
             let today = new Date();
-            let nextMilestoneDate = new Date(today.getFullYear(), today.getMonth(), 25);
-            if (today.getDate() > 25) {
-                nextMilestoneDate.setMonth(nextMilestoneDate.getMonth() + 1);
-            }
+            // Filter: which installments are still due (keep existing logic, rename variable)
+            const milestoneCutoff = new Date(today.getFullYear(), today.getMonth(), 25);
+            if (today.getDate() > 25) milestoneCutoff.setMonth(milestoneCutoff.getMonth() + 1);
 
             // Unpaid if deadline is future AND not explicitly marked paid in state
             const paidArray = stats.uni_installments_paid || [];
             const unpaidInstallments = installments.filter(i =>
-                i.deadline >= nextMilestoneDate && !paidArray.includes(i.originalIndex)
+                i.deadline >= milestoneCutoff && !paidArray.includes(i.id)
             );
 
-            if (unpaidInstallments.length === 0) return { baseline: 0, dynamic: 0 };
+            if (unpaidInstallments.length === 0) return { baseline: 0, dynamic: 0, nearestInstallment: 0, totalRemainingCost: 0, totalMonthsRemaining: 1 };
 
             let totalRemainingCost = 0;
             for (const inst of unpaidInstallments) {
@@ -278,14 +290,32 @@ export default function WealthArchitecture() {
 
             const finalInstallmentDate = unpaidInstallments[unpaidInstallments.length - 1].deadline;
 
-            const diffDays = (finalInstallmentDate.getTime() - nextMilestoneDate.getTime()) / (1000 * 3600 * 24);
-            let totalMonthsRemaining = Math.max(1, diffDays / 30.44);
+            // Time decay: always count from right now, not from the next milestone
+            const diffDays = (finalInstallmentDate.getTime() - today.getTime()) / (1000 * 3600 * 24);
+            const totalMonthsRemaining = Math.max(1, diffDays / 30.44);
 
             const baselineRequirement = totalRemainingCost / totalMonthsRemaining;
             const netDeficit = Math.max(0, totalRemainingCost - Number(stats.wealth_uni_fund));
             const dynamicRequirement = netDeficit / totalMonthsRemaining;
 
-            return { baseline: baselineRequirement, dynamic: dynamicRequirement };
+            // M3: Nearest installment binding constraint
+            const nearestInstallment = unpaidInstallments[0]; // Already sorted by deadline
+            const nearestCost = nearestInstallment.amountGbp
+                ? nearestInstallment.amountGbp * gbpRate
+                : (nearestInstallment.amountLkr || 0);
+            const nearestDiffDays =
+                (nearestInstallment.deadline.getTime() - today.getTime()) / (1000 * 3600 * 24);
+            const nearestMonthsRemaining = Math.max(1, nearestDiffDays / 30.44);
+            const nearestInstallmentRequirement =
+                Math.max(0, nearestCost - Number(stats.wealth_uni_fund)) / nearestMonthsRemaining;
+
+            return {
+                baseline: baselineRequirement,
+                dynamic: dynamicRequirement,
+                nearestInstallment: nearestInstallmentRequirement,
+                totalRemainingCost,
+                totalMonthsRemaining
+            };
         };
 
         return {
@@ -297,21 +327,23 @@ export default function WealthArchitecture() {
 
     // Derived States
     const activeRequirementMetrics = allPlanMetrics[stats.active_uni_plan as keyof typeof allPlanMetrics] || allPlanMetrics['Plan 02'];
-    const activeMonthlyRequirement = activeRequirementMetrics.baseline;
-    const activeDynamicRequirement = activeRequirementMetrics.dynamic;
+    const activeMonthlyRequirement = activeRequirementMetrics.dynamic;
+    const baselineReferenceRate = activeRequirementMetrics.baseline;
 
     // Total Liquid Assets (Physical Cash)
     const totalLiquidAssets = Math.max(0, Number(stats.wallet_balance)) + Math.max(0, Number(stats.wealth_uni_fund));
 
     // Capabilities (Strict Monthly Cash Flow -> Master Pool)
     const uniFundExcess = Math.max(0, Number(stats.wealth_uni_fund) - activeMonthlyRequirement);
-    const monthlyCapability = Number(stats.wallet_balance) + uniFundExcess - recurringExpensesTotal;
+    const monthlyCapability = Number(stats.wallet_balance) + uniFundExcess - proratedRecurringTotal;
 
     // Smart Recommendation logic using static, non-circular baseline
     const staticPlanMonthlyRate = (planKey: string) => {
         const installments = UNIVERSITY_PLANS[planKey] || [];
-        const totalCost = installments.reduce((sum, inst) =>
-            sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate), 0);
+        const totalCost = installments.reduce((sum, inst) => {
+            if ((stats.uni_installments_paid || []).includes(inst.id)) return sum;
+            return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate);
+        }, 0);
         if (installments.length === 0) return 0;
 
         const lastDate = installments[installments.length - 1].deadline;
@@ -321,14 +353,14 @@ export default function WealthArchitecture() {
 
     let recommendedPlan = 'Plan 03';
     const projectedRecommendationCapacity = Number(stats.wallet_salary) + recentVariableIncome - recurringExpensesTotal;
-    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 02') + 10000) recommendedPlan = 'Plan 02';
-    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 01') + 10000) recommendedPlan = 'Plan 01';
+    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 02') + PLAN_RECOMMENDATION_BUFFER_LKR) recommendedPlan = 'Plan 02';
+    if (projectedRecommendationCapacity > staticPlanMonthlyRate('Plan 01') + PLAN_RECOMMENDATION_BUFFER_LKR) recommendedPlan = 'Plan 01';
 
     // Handlers
-    const handleMarkInstallmentPaid = async (_planKey: string, installmentIndex: number) => {
+    const handleMarkInstallmentPaid = async (_planKey: string, instId: string) => {
         const paidArray = stats.uni_installments_paid || [];
-        if (paidArray.includes(installmentIndex)) return;
-        const updated = [...paidArray, installmentIndex];
+        if (paidArray.includes(instId)) return;
+        const updated = [...paidArray, instId];
         setStats(prev => ({ ...prev, uni_installments_paid: updated }));
 
         const { data: { user } } = await supabase.auth.getUser();
@@ -342,6 +374,13 @@ export default function WealthArchitecture() {
     };
 
     const handleSwitchPlan = async (plan: string) => {
+        const hasPaid = (stats.uni_installments_paid || []).length > 0;
+        if (hasPaid && !window.confirm(
+            "⚠️ You have already marked installments as paid on your current plan. Switching plans will " +
+            "reassign those payment records to different installments and may corrupt your tracking. " +
+            "Are you absolutely sure you want to switch?"
+        )) return;
+
         const previous = stats.active_uni_plan;
         setStats(prev => ({ ...prev, active_uni_plan: plan }));
         try {
@@ -374,9 +413,154 @@ export default function WealthArchitecture() {
 
         if (success) {
             await fetchData();
+            setSelectedRecurringExp(null);
+
+            // Check if subscription is now complete
+            const { data: updatedExp } = await supabase
+                .from('recurring_expenses')
+                .select('installments_paid, total_installments')
+                .eq('id', exp.id)
+                .single();
+
+            if (
+                updatedExp &&
+                updatedExp.total_installments !== null &&
+                updatedExp.installments_paid >= updatedExp.total_installments
+            ) {
+                await handleCompleteRecurringExpense(exp);
+            }
         } else {
             alert(`Failed to execute payment: ${error}`);
         }
+    };
+
+    const handleUndoRecurringPaid = async (exp: RecurringExpense) => {
+        if (exp.installments_paid <= 0) {
+            alert('No payments to undo for this subscription.');
+            return;
+        }
+        if (exp.billing_frequency === 'annually') {
+            if (!window.confirm(
+                `You are reversing an annual payment of LKR ${Number(exp.amount).toLocaleString()}. ` +
+                `This will roll your next due date back by one full year and return ` +
+                `LKR ${Number(exp.amount).toLocaleString()} to your wallet. Are you sure?`
+            )) return;
+        }
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data, error } = await supabase.rpc('undo_recurring_payment_atomic', {
+            p_expense_id: exp.id,
+            p_user_id: user.id,
+            p_date: getLocalISODate()
+        });
+
+        if (error) { alert(`Undo failed: ${error.message}`); return; }
+
+        setStats(prev => ({ ...prev, wallet_balance: data.wallet_snapshot }));
+        setSelectedRecurringExp(null);
+        await fetchData();
+    };
+
+    const handleLogHistoricalInstallment = async (exp: RecurringExpense) => {
+        const dateStr = window.prompt(
+            'When was this payment made? (YYYY-MM-DD)',
+            getLocalISODate()
+        );
+        if (!dateStr) return;
+
+        const alreadyAccounted = window.confirm(
+            `Was this payment of LKR ${Number(exp.amount).toLocaleString()} already ` +
+            `accounted for outside the system?\n\n` +
+            `OK → Do not deduct wallet (payment happened in real world)\n` +
+            `Cancel → Deduct LKR ${Number(exp.amount).toLocaleString()} from wallet now`
+        );
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        const { data, error } = await supabase.rpc('log_historical_installment_atomic', {
+            p_expense_id: exp.id,
+            p_user_id: user.id,
+            p_amount: exp.amount,
+            p_date: dateStr,
+            p_title: exp.title,
+            p_deduct_wallet: !alreadyAccounted
+        });
+
+        if (error) { alert(`Failed to log installment: ${error.message}`); return; }
+
+        if (!alreadyAccounted) {
+            setStats(prev => ({ ...prev, wallet_balance: data.wallet_snapshot }));
+        }
+        
+        if (exp.total_installments && data.new_installments_paid >= exp.total_installments) {
+            await handleCompleteRecurringExpense({ ...exp, installments_paid: data.new_installments_paid });
+        } else {
+            await fetchData();
+        }
+    };
+
+    const handleCompleteRecurringExpense = async (exp: RecurringExpense) => {
+        const shouldDelete = window.confirm(
+            `🎉 You've completed all ${exp.total_installments} installments for ` +
+            `"${exp.title}".\n\n` +
+            `OK → Remove it from your bills entirely\n` +
+            `Cancel → Keep it as a completed record (greyed out)`
+        );
+
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        await supabase.rpc('complete_recurring_expense_atomic', {
+            p_expense_id: exp.id,
+            p_user_id: user.id,
+            p_action: shouldDelete ? 'delete' : 'keep'
+        });
+
+        setSelectedRecurringExp(null);
+        await fetchData();
+    };
+
+    const handleDeleteRecurring = async (exp: RecurringExpense) => {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+
+        if (exp.installments_paid > 0) {
+            const hardDelete = window.confirm(
+                `You are deleting "${exp.title}". You have made ` +
+                `${exp.installments_paid} payment(s) totalling ` +
+                `LKR ${(exp.installments_paid * Number(exp.amount)).toLocaleString()}.\n\n` +
+                `OK → Reverse all payments and return money to wallet\n` +
+                `Cancel → Keep payment history, just remove the subscription`
+            );
+
+            if (hardDelete) {
+                const { data, error } = await supabase.rpc('delete_recurring_hard_atomic', {
+                    p_expense_id: exp.id,
+                    p_user_id: user.id,
+                    p_date: getLocalISODate()
+                });
+                if (error) { alert(`Delete failed: ${error.message}`); return; }
+                setStats(prev => ({ ...prev, wallet_balance: data.wallet_snapshot }));
+            } else {
+                await supabase.rpc('delete_recurring_soft_atomic', {
+                    p_expense_id: exp.id,
+                    p_user_id: user.id
+                });
+            }
+        } else {
+            if (!window.confirm(
+                `Remove "${exp.title}" from your recurring bills?`
+            )) return;
+            await supabase.rpc('delete_recurring_soft_atomic', {
+                p_expense_id: exp.id,
+                p_user_id: user.id
+            });
+        }
+
+        setSelectedRecurringExp(null);
+        await fetchData();
     };
 
     const handleUndoTransaction = async (tx: any) => {
@@ -453,38 +637,9 @@ export default function WealthArchitecture() {
         setLoading(false);
     };
 
-    const getTransactionMeta = (tx: any) => {
-        if (tx.type === 'IN' && tx.description?.startsWith('Coaching Income'))
-            return { label: 'COACHING', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
-        if (tx.type === 'IN' && tx.description?.startsWith('Salary'))
-            return { label: 'SALARY', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
-        if (tx.type === 'IN' && tx.description?.startsWith('Refunded'))
-            return { label: 'REFUND', color: 'text-amber-400', bg: 'bg-amber-500/10', border: 'border-amber-500/20' };
-        if (tx.type === 'IN')
-            return { label: 'CREDIT', color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/20' };
-        if (tx.type === 'OUT' && tx.description === 'Uni Fund Contribution')
-            return { label: 'FUND SWEEP', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
-        if (tx.type === 'FUND_IN')
-            return { label: 'FUND IN', color: 'text-indigo-400', bg: 'bg-indigo-500/10', border: 'border-indigo-500/20' };
-        if (tx.type === 'OUT')
-            return { label: 'EXPENSE', color: 'text-rose-400', bg: 'bg-rose-500/10', border: 'border-rose-500/20' };
-        return { label: 'TRANSFER', color: 'text-zinc-400', bg: 'bg-zinc-500/10', border: 'border-zinc-500/20' };
-    };
-
-    const LEDGER_FILTERS: Record<string, (tx: any) => boolean> = {
-        'INCOME': tx => tx.amount > 0 && tx.type === 'IN',
-        'EXPENSE': tx => tx.type === 'OUT' && tx.description !== 'Uni Fund Contribution',
-        'SALARY': tx => tx.description?.startsWith('Salary'),
-        'COACHING': tx => tx.description?.startsWith('Coaching Income'),
-        'RECURRING': tx => tx.description?.startsWith('Recurring:'),
-        'UNI FUND': tx => tx.description === 'Uni Fund Contribution' ||
-            tx.description === 'Fund Withdrawal to Wallet' ||
-            tx.type === 'FUND_IN',
-        'REFUNDS': tx => tx.description?.startsWith('Refunded'),
-    };
 
     const filteredLedger = useMemo(() => {
-        let result = [...transactionLedger].filter(tx => !tx.is_reversed);
+        let result = [...transactionLedger];
 
         // 1. Apply date range filter
         if (ledgerDateRange !== 'all') {
@@ -519,7 +674,7 @@ export default function WealthArchitecture() {
         const groups: { dateKey: string, entries: any[] }[] = [];
 
         for (const tx of sliced) {
-            const dateKey = new Date(tx.date).toISOString().split('T')[0];
+            const dateKey = tx.date.slice(0, 10);
             let group = groups.find(g => g.dateKey === dateKey);
             if (!group) {
                 group = { dateKey, entries: [] };
@@ -530,24 +685,13 @@ export default function WealthArchitecture() {
         return groups;
     }, [filteredLedger, displayLimit]);
 
-    const formatGroupHeader = (dateKey: string) => {
-        const todayStr = getLocalISODate();
-        const yesterday = getLocalISODateOffset(-1);
-
-        if (dateKey === todayStr) return "Today";
-        if (dateKey === yesterday) return "Yesterday";
-
-        return new Date(dateKey).toLocaleDateString('default', {
-            day: 'numeric', month: 'short', year: 'numeric'
-        });
-    };
 
     // Minimum Tracking Math
 
     // Dynamically find the first collection date from history (excluding reversed transactions)
     const firstCollectionTx = transactionLedger && transactionLedger.length > 0
         ? [...transactionLedger]
-            .filter(tx => (tx.description === 'Uni Fund Contribution' || tx.type === 'FUND_IN') && !tx.is_reversed)
+            .filter(tx => (tx.description === 'Uni Fund Contribution' || tx.type === 'FUND_IN') && !tx.is_reversed && !tx.description.includes('Legacy Starting Capital'))
             .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())[0]
         : null;
 
@@ -561,11 +705,11 @@ export default function WealthArchitecture() {
 
     const minimumExpectedFundBalance = activeMonthlyRequirement * monthsElapsed;
 
-    const maxWithdrawable = Math.max(0, Number(stats.wealth_uni_fund) - activeMonthlyRequirement);
+    const maxWithdrawable = Math.max(0, Number(stats.wealth_uni_fund) - minimumExpectedFundBalance);
 
     const handleWithdrawFromFund = async (amount: number) => {
-        if (amount <= 0 || amount > maxWithdrawable) {
-            alert(`Invalid amount. Maximum withdrawable is LKR ${maxWithdrawable.toLocaleString()}.`);
+        if (amount <= 0 || amount > Number(stats.wealth_uni_fund)) {
+            alert(`Invalid amount. Fund balance is LKR ${Number(stats.wealth_uni_fund).toLocaleString()}.`);
             return;
         }
 
@@ -698,15 +842,11 @@ export default function WealthArchitecture() {
                             </button>
                             <button
                                 onClick={() => {
-                                    if (maxWithdrawable <= 0) {
-                                        alert('Fund is at its minimum floor. No surplus available to withdraw.');
-                                        return;
-                                    }
-                                    setWithdrawAmount(String(maxWithdrawable));
+                                    setWithdrawAmount(maxWithdrawable > 0 ? String(maxWithdrawable) : '');
                                     setIsWithdrawModalOpen(true);
                                 }}
-                                className={`p-2 border rounded-xl transition-all ${maxWithdrawable > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20' : 'border-zinc-700/30 bg-zinc-800/20 text-zinc-600 cursor-not-allowed'}`}
-                                title={maxWithdrawable > 0 ? `Withdraw from Fund (Max: LKR ${maxWithdrawable.toLocaleString()})` : 'Fund at minimum floor — no withdrawal available'}
+                                className="p-2 border border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 rounded-xl transition-all"
+                                title="Withdraw from Fund (Emergency Override Available)"
                             >
                                 <ArrowLeft className="w-5 h-5" />
                             </button>
@@ -753,10 +893,10 @@ export default function WealthArchitecture() {
                             <span>Due Date</span>
                         </div>
                         <div className="divide-y divide-zinc-800/30 max-h-32 overflow-y-auto no-scrollbar">
-                            {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst, idx) => {
-                                const isPaid = stats.uni_installments_paid?.includes(idx) || false;
+                            {UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.map((inst) => {
+                                const isPaid = stats.uni_installments_paid?.includes(inst.id) || false;
                                 return (
-                                    <div key={idx} className="px-3 py-2 flex justify-between items-center text-xs">
+                                    <div key={inst.id} className="px-3 py-2 flex justify-between items-center text-xs">
                                         <span className={`font-mono transition-opacity ${isPaid ? 'text-emerald-400 line-through opacity-70' : 'text-zinc-300'}`}>
                                             {inst.amountGbp ? `£${inst.amountGbp.toLocaleString()} (LKR ${(inst.amountGbp * gbpRate / 1000).toLocaleString(undefined, { maximumFractionDigits: 0 })}k)` : ``}
                                             {inst.amountLkr ? `LKR ${(inst.amountLkr / 1000).toLocaleString()}k` : ``}
@@ -767,7 +907,7 @@ export default function WealthArchitecture() {
                                             </span>
                                             {!isPaid && (
                                                 <button
-                                                    onClick={() => handleMarkInstallmentPaid(stats.active_uni_plan, idx)}
+                                                    onClick={() => handleMarkInstallmentPaid(stats.active_uni_plan, inst.id)}
                                                     className="p-1 text-emerald-500/50 hover:text-emerald-400 hover:bg-emerald-500/10 rounded-md transition-all"
                                                     title="Mark as Paid Externally"
                                                 >
@@ -788,8 +928,8 @@ export default function WealthArchitecture() {
                         <div className="bg-zinc-950/80 p-3 flex justify-between items-center border-t border-zinc-800/50 text-xs pb-4">
                             <span className="text-zinc-400 font-bold">Remaining Capital Needed</span>
                             <span className="font-mono font-black text-amber-500">
-                                LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst, idx) => {
-                                    if (stats.uni_installments_paid?.includes(idx)) return sum; // If paid, it's no longer needed
+                                LKR {Math.max(0, (UNIVERSITY_PLANS[stats.active_uni_plan || 'Plan 02']?.reduce((sum, inst) => {
+                                    if (stats.uni_installments_paid?.includes(inst.id)) return sum; // If paid, it's no longer needed
                                     return sum + (inst.amountLkr || 0) + ((inst.amountGbp || 0) * gbpRate);
                                 }, 0) || 0) - Number(stats.wealth_uni_fund)).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
@@ -800,27 +940,40 @@ export default function WealthArchitecture() {
                                 <span className="text-[9px] text-zinc-600 block mt-0.5 font-normal">
                                     Based on {monthsElapsed} month{monthsElapsed !== 1 ? 's' : ''} of collection @ LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
                                 </span>
+                                <span className="text-[9px] text-zinc-600 block mt-0.5 font-normal italic">
+                                    * Benchmark assumes current GBP rate of LKR {gbpRate.toFixed(2)} applied uniformly. Actual historical rate may differ.
+                                </span>
                             </div>
-                            <div className="text-right">
-                                <span className={`font-mono font-black text-sm ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            <div className="flex flex-col items-end justify-center gap-1 shrink-0 ml-4">
+                                <span className={`font-mono font-black text-sm leading-none whitespace-nowrap ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-400' : 'text-rose-400'}`}>
                                     LKR {minimumExpectedFundBalance.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                                 </span>
-                                <span className={`ml-2 text-[9px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded border ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-500/80 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500/80 bg-rose-500/10 border-rose-500/20'}`}>
+                                <span className={`text-[9px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded border whitespace-nowrap ${Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'text-emerald-500/80 bg-emerald-500/10 border-emerald-500/20' : 'text-rose-500/80 bg-rose-500/10 border-rose-500/20'}`}>
                                     {Number(stats.wealth_uni_fund) >= minimumExpectedFundBalance ? 'ON TRACK' : 'BEHIND'}
                                 </span>
                             </div>
                         </div>
                     </div>
 
-                    <div className="bg-black/30 rounded-xl p-4 border border-zinc-800/50 flex justify-between items-center">
-                        <div>
-                            <span className="text-[10px] text-zinc-500 block uppercase tracking-widest font-bold mb-1">Baseline Requirement (Next 25th)</span>
-                            <span className="text-lg font-mono text-white">
-                                LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-                                <span className="text-[11px] font-mono text-zinc-500 ml-2 font-normal">(LKR {activeDynamicRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })} dynamic)</span>
-                            </span>
+                    <div className="bg-black/30 rounded-xl p-4 border border-zinc-800/50">
+                        <div className="flex justify-between items-center">
+                            <div>
+                                <span className="text-[10px] text-zinc-500 block uppercase tracking-widest font-bold mb-1">Monthly Requirement</span>
+                                <span className="text-lg font-mono text-white">
+                                    LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                                    <span className="text-[11px] font-mono text-zinc-500 ml-2 font-normal">(LKR {baselineReferenceRate.toLocaleString(undefined, { maximumFractionDigits: 0 })} Baseline Ref.)</span>
+                                </span>
+                            </div>
+                            <Activity className="w-6 h-6 text-zinc-700" />
                         </div>
-                        <Activity className="w-6 h-6 text-zinc-700" />
+                        {activeRequirementMetrics.nearestInstallment > 0 && (
+                            <div className="mt-3 pt-3 border-t border-zinc-800/50 flex justify-between items-center">
+                                <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Nearest Deadline Req.</span>
+                                <span className={`font-mono font-bold text-sm ${activeRequirementMetrics.nearestInstallment > activeMonthlyRequirement ? 'text-amber-400' : 'text-zinc-300'}`}>
+                                    LKR {activeRequirementMetrics.nearestInstallment.toLocaleString(undefined, { maximumFractionDigits: 0 })}/mo
+                                </span>
+                            </div>
+                        )}
                     </div>
                 </div>
                 <div className="flex flex-col gap-4">
@@ -892,14 +1045,20 @@ export default function WealthArchitecture() {
 
                 <div className="space-y-3">
                     {priorityExpenses.map((expense) => {
-                        // Explicit forecasting logic using a dedicated monthly savings rate
-                        const monthlySavingsRate = Math.max(0, Number(stats.wallet_salary) + recentVariableIncome + uniFundExcess - recurringExpensesTotal);
-
-                        const monthsNeeded = monthlySavingsRate > 0 ? (expense.amount / monthlySavingsRate) : Infinity;
+                        // M2: Monthly flow excludes one-time stock; M6-B uses prorated recurring
+                        const monthlyFlow = Math.max(
+                            0,
+                            Number(stats.wallet_salary) + recentVariableIncome - proratedRecurringTotal
+                        );
+                        const effectiveGoalAmount = Math.max(0, expense.amount - uniFundExcess);
+                        const monthsNeeded = monthlyFlow > 0 ? effectiveGoalAmount / monthlyFlow : Infinity;
+                        // M7: Use day-based math to avoid fractional month truncation
                         const projectedDate = new Date();
-                        if (monthsNeeded !== Infinity) projectedDate.setMonth(projectedDate.getMonth() + monthsNeeded);
+                        if (monthsNeeded !== Infinity) {
+                            projectedDate.setDate(projectedDate.getDate() + Math.round(monthsNeeded * 30.44));
+                        }
 
-                        const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || monthlySavingsRate <= 0;
+                        const isAtRisk = projectedDate.getTime() > new Date(expense.target_date).getTime() || monthlyFlow <= 0;
 
                         return (
                             <div key={expense.id} className="p-4 rounded-xl border border-zinc-800 bg-zinc-900 shadow-lg">
@@ -963,20 +1122,38 @@ export default function WealthArchitecture() {
                         });
 
                         return sortedList.map(exp => (
-                            <div key={exp.id} className={`p-4 rounded-xl border flex justify-between items-center transition-all ${!exp.isDue ? 'bg-zinc-900/30 border-zinc-800/30 opacity-60 grayscale' : 'bg-zinc-900 border-zinc-800 shadow-lg'}`}>
+                            <div
+                                key={exp.id}
+                                onClick={() => setSelectedRecurringExp(exp)}
+                                className={`p-4 rounded-xl border flex justify-between items-center transition-all cursor-pointer hover:border-zinc-600 ${exp.is_complete ? 'bg-zinc-900/20 border-zinc-800/20 opacity-40 grayscale' : !exp.isDue ? 'bg-zinc-900/30 border-zinc-800/30 opacity-60 grayscale' : 'bg-zinc-900 border-zinc-800 shadow-lg'}`}
+                            >
                                 <div>
-                                    <h4 className={`font-bold ${!exp.isDue ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>{exp.title}</h4>
-                                    <span className={`text-sm font-mono ${!exp.isDue ? 'text-zinc-600 line-through' : 'text-rose-400'}`}>LKR {exp.amount.toLocaleString()}</span>
+                                    <h4 className={`font-bold ${exp.is_complete ? 'text-zinc-600 line-through' : !exp.isDue ? 'text-zinc-500 line-through' : 'text-zinc-100'}`}>
+                                        {exp.title}
+                                        {exp.billing_frequency === 'annually' && (
+                                            <span className="ml-2 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border text-amber-400 bg-amber-500/10 border-amber-500/20">ANNUAL</span>
+                                        )}
+                                    </h4>
+                                    <span className={`text-sm font-mono ${exp.is_complete ? 'text-zinc-700 line-through' : !exp.isDue ? 'text-zinc-600 line-through' : 'text-rose-400'}`}>LKR {Number(exp.amount).toLocaleString()}</span>
                                     <span className="block text-[10px] uppercase text-zinc-500 mt-1">Due {exp.billing_frequency === 'annually' ? 'Annually' : 'Monthly'} on {formatDate(new Date(exp.next_due_date))}</span>
+                                    {exp.total_installments !== null && (
+                                        <span className="block text-[10px] font-bold text-indigo-400 mt-1">
+                                            {exp.installments_paid}/{exp.total_installments} paid
+                                        </span>
+                                    )}
                                 </div>
                                 <div className="flex gap-2">
-                                    {!exp.isDue ? (
+                                    {exp.is_complete ? (
+                                        <div className="px-3 py-1 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-lg text-xs font-bold">
+                                            COMPLETE
+                                        </div>
+                                    ) : !exp.isDue ? (
                                         <div className="px-3 py-1 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-lg text-xs font-bold">
                                             CLEARED
                                         </div>
                                     ) : (
                                         <button
-                                            onClick={() => handleMarkRecurringPaid(exp)}
+                                            onClick={(e) => { e.stopPropagation(); handleMarkRecurringPaid(exp); }}
                                             className="p-2 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500 hover:text-white rounded-lg border border-emerald-500/20 transition-all shadow-lg"
                                             title="Mark as Paid"
                                         >
@@ -995,198 +1172,48 @@ export default function WealthArchitecture() {
                 </div>
             </div>
 
+            {/* Recurring Detail Modal */}
+            <AnimatePresence>
+                {selectedRecurringExp && (
+                    <RecurringDetailModal
+                        expense={selectedRecurringExp}
+                        isDue={(() => {
+                            const today = new Date(); today.setHours(0, 0, 0, 0);
+                            const due = new Date(selectedRecurringExp.next_due_date);
+                            due.setHours(0, 0, 0, 0);
+                            return today >= due;
+                        })()}
+                        onClose={() => setSelectedRecurringExp(null)}
+                        onMarkPaid={handleMarkRecurringPaid}
+                        onUndoPaid={handleUndoRecurringPaid}
+                        onEdit={() => {
+                            setSelectedRecurringExp(null);
+                            setIsRecurringModalOpen(true);
+                        }}
+                        onDelete={handleDeleteRecurring}
+                        onToggleInstallment={handleLogHistoricalInstallment}
+                    />
+                )}
+            </AnimatePresence>
+
             {/* Unified Financial Ledger */}
-            <div className="mt-8">
-                <div className="flex items-center justify-between mb-4 px-1">
-                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                        <History className="w-4 h-4 text-zinc-400" /> Financial Transaction Ledger
-                    </h3>
-                </div>
-
-                {/* Filter Row 1 */}
-                <div className="flex items-stretch justify-between mb-3 gap-2">
-                    <div className="flex gap-1.5 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
-                        {(['7d', '30d', '90d', 'all'] as const).map(range => (
-                            <button
-                                key={range}
-                                onClick={() => setLedgerDateRange(range)}
-                                className={`px-2.5 py-1 rounded-md text-[10px] font-bold uppercase tracking-widest transition-all ${ledgerDateRange === range
-                                    ? 'bg-zinc-700 text-white shadow-sm'
-                                    : 'bg-transparent text-zinc-500 hover:text-zinc-300'
-                                    }`}
-                            >
-                                {range === 'all' ? 'All Time' :
-                                    range === '7d' ? '7 Days' :
-                                        range === '30d' ? '30 Days' : '90 Days'}
-                            </button>
-                        ))}
-                    </div>
-
-                    <div className="flex items-stretch gap-2">
-                        <button
-                            onClick={() => setIsLedgerFilterModalOpen(true)}
-                            className="relative flex items-center gap-1.5 px-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition-all"
-                            title="Filter Ledger"
-                        >
-                            <Filter className="w-3 h-3" /> Filter
-                            {ledgerTypeFilters.length > 0 && (
-                                <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 w-4 rounded-full bg-rose-500 border border-zinc-900 text-[9px] text-white font-black">
-                                    {ledgerTypeFilters.length}
-                                </span>
-                            )}
-                        </button>
-                        <button
-                            onClick={() => setLedgerSortAsc(prev => !prev)}
-                            className="flex items-center gap-1.5 px-2.5 rounded-lg text-[10px] font-bold uppercase tracking-widest border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:border-zinc-700 transition-all"
-                            title={ledgerSortAsc ? 'Showing oldest first' : 'Showing newest first'}
-                        >
-                            {ledgerSortAsc
-                                ? <><ArrowUp className="w-3 h-3" /> Oldest</>
-                                : <><ArrowDown className="w-3 h-3" /> Newest</>
-                            }
-                        </button>
-                    </div>
-                </div>
-
-                {/* Ledger Filtering Modal */}
-                <AnimatePresence>
-                    {isLedgerFilterModalOpen && (
-                        <GenericModal onClose={() => setIsLedgerFilterModalOpen(false)} title="Filter Ledger">
-                            <div className="space-y-4">
-                                <div>
-                                    <span className="text-[10px] uppercase font-bold text-zinc-500 block mb-3">Transaction Types</span>
-                                    <div className="flex flex-wrap gap-2">
-                                        {Object.keys(LEDGER_FILTERS).map(filterKey => {
-                                            const isActive = ledgerTypeFilters.includes(filterKey);
-                                            const chipColorMap: Record<string, { active: string; inactive: string }> = {
-                                                'INCOME': { active: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'EXPENSE': { active: 'bg-rose-500/20 border-rose-500/40 text-rose-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'SALARY': { active: 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'COACHING': { active: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'RECURRING': { active: 'bg-amber-500/20 border-amber-500/40 text-amber-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'UNI FUND': { active: 'bg-indigo-500/20 border-indigo-500/40 text-indigo-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                                'REFUNDS': { active: 'bg-amber-500/20 border-amber-500/40 text-amber-400', inactive: 'bg-transparent border-zinc-800 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300' },
-                                            };
-                                            return (
-                                                <button
-                                                    key={filterKey}
-                                                    onClick={() => setLedgerTypeFilters(prev =>
-                                                        prev.includes(filterKey)
-                                                            ? prev.filter(f => f !== filterKey)
-                                                            : [...prev, filterKey]
-                                                    )}
-                                                    className={`px-3 py-1.5 rounded-full text-xs font-black uppercase tracking-widest border transition-all ${isActive
-                                                        ? chipColorMap[filterKey].active
-                                                        : chipColorMap[filterKey].inactive
-                                                        }`}
-                                                >
-                                                    {filterKey}
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                                {ledgerTypeFilters.length > 0 && (
-                                    <button
-                                        onClick={() => setLedgerTypeFilters([])}
-                                        className="w-full py-3 mt-2 bg-zinc-800/80 hover:bg-rose-500/20 text-zinc-300 hover:text-rose-400 border border-zinc-700 hover:border-rose-500/50 font-bold rounded-xl transition-all uppercase tracking-widest text-xs"
-                                    >
-                                        Clear Active Filters
-                                    </button>
-                                )}
-                                <button
-                                    onClick={() => setIsLedgerFilterModalOpen(false)}
-                                    className="w-full py-3 mt-2 bg-zinc-800 hover:bg-zinc-700 text-white font-bold rounded-xl transition-all uppercase tracking-widest text-xs"
-                                >
-                                    Done
-                                </button>
-                            </div>
-                        </GenericModal>
-                    )}
-                </AnimatePresence>
-
-                {/* Results Summary Bar */}
-                <div className="flex items-center justify-between mb-4 px-1">
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">
-                        {filteredLedger.length} transaction{filteredLedger.length !== 1 ? 's' : ''}
-                        {ledgerTypeFilters.length > 0 || ledgerDateRange !== 'all'
-                            ? ' (filtered)'
-                            : ''}
-                    </span>
-                    {filteredLedger.length === 0 && transactionLedger.length > 0 && (
-                        <span className="text-[10px] text-zinc-600">
-                            No transactions match the active filters.
-                        </span>
-                    )}
-                </div>
-
-                <div className="space-y-0">
-                    {groupedLedger.map((group) => (
-                        <div key={group.dateKey}>
-                            <div className="mt-4 mb-2 py-2 border-b border-zinc-800/50">
-                                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-widest">
-                                    {formatGroupHeader(group.dateKey)}
-                                </span>
-                            </div>
-                            <div className="space-y-2">
-                                {group.entries.map((tx: any) => {
-                                    const meta = getTransactionMeta(tx);
-                                    return (
-                                        <div key={tx.id} className="p-3.5 rounded-xl border border-zinc-800/80 bg-zinc-900/40 flex justify-between items-center transition-all hover:bg-zinc-900/60">
-                                            <div className="min-w-0 pr-4 flex flex-col justify-center">
-                                                <h4 className="font-bold text-zinc-300 truncate text-sm leading-tight">{tx.description}</h4>
-                                                <div className="flex items-center mt-1.5">
-                                                    <span className={`shrink-0 text-[10px] uppercase font-bold px-1.5 py-0.5 rounded border ${meta.bg} ${meta.color} ${meta.border}`}>
-                                                        {meta.label}
-                                                    </span>
-                                                    <span className="text-[10px] text-zinc-600 font-mono tracking-widest ml-2 truncate">
-                                                        {formatDate(new Date(tx.date))}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                            <div className="shrink-0 text-right flex flex-col justify-center items-end">
-                                                <div className="flex items-center gap-2">
-                                                    <span className={`font-mono font-bold tracking-tight ${tx.amount > 0 ? 'text-emerald-400' : tx.amount < 0 ? 'text-rose-400' : 'text-zinc-300'}`}>
-                                                        {tx.amount > 0 ? '+' : tx.amount < 0 ? '−' : ''} LKR {Math.abs(tx.amount).toLocaleString()}
-                                                    </span>
-                                                    {!tx.is_reversed && tx.type !== 'FUND_OUT' && tx.type !== 'FUND_SWEEP_IN' && tx.type !== 'FUND_WITHDRAWAL_OUT' && tx.type !== 'LEGACY_MIGRATION' && !activelyUndoingIds.has(tx.id) && (
-                                                        <button
-                                                            onClick={() => handleUndoTransaction(tx)}
-                                                            className="p-1.5 text-zinc-600 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg transition-colors border border-transparent hover:border-rose-900/50"
-                                                            title="Undo this transaction"
-                                                        >
-                                                            <Trash2 className="w-4 h-4" />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                                <div className="text-[10px] font-mono font-bold text-zinc-500 mt-0.5" title="Running Balance (Operating Wallet)">
-                                                    Bal: LKR {Number(tx.wallet_balance_snapshot || 0).toLocaleString()}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                    ))}
-                    {transactionLedger.length === 0 && (
-                        <div className="text-center py-6 border border-dashed border-zinc-800 rounded-xl text-zinc-600 text-[10px] uppercase tracking-widest font-bold mt-4">
-                            No ledger history found.
-                        </div>
-                    )}
-
-                    {displayLimit < filteredLedger.length && (
-                        <div className="pt-6 pb-2">
-                            <button
-                                onClick={() => setDisplayLimit(prev => Math.min(prev + 10, filteredLedger.length))}
-                                className="w-full py-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-all uppercase tracking-widest"
-                            >
-                                Load 10 more
-                            </button>
-                        </div>
-                    )}
-                </div>
-            </div>
+            <TransactionLedger
+                transactionLedger={transactionLedger}
+                filteredLedger={filteredLedger}
+                groupedLedger={groupedLedger}
+                displayLimit={displayLimit}
+                setDisplayLimit={setDisplayLimit}
+                ledgerTypeFilters={ledgerTypeFilters}
+                setLedgerTypeFilters={setLedgerTypeFilters}
+                ledgerDateRange={ledgerDateRange}
+                setLedgerDateRange={setLedgerDateRange}
+                ledgerSortAsc={ledgerSortAsc}
+                setLedgerSortAsc={setLedgerSortAsc}
+                activelyUndoingIds={activelyUndoingIds}
+                handleUndoTransaction={handleUndoTransaction}
+                isLedgerFilterModalOpen={isLedgerFilterModalOpen}
+                setIsLedgerFilterModalOpen={setIsLedgerFilterModalOpen}
+            />
 
             {/* Income Logging Modal */}
             <AnimatePresence>
@@ -1257,7 +1284,7 @@ export default function WealthArchitecture() {
                             <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl flex gap-3 text-amber-500">
                                 <AlertTriangle className="w-5 h-5 shrink-0" />
                                 <p className="text-xs">
-                                    You are moving funds out of the protected Master Pool back into your Operating Wallet. You can only withdraw excess capital above the required baseline.
+                                    You are moving funds out of the protected Master Pool back into your Operating Wallet. You should ideally only withdraw excess capital above the required baseline. <strong>Withdrawing below your safety floor will trigger an emergency penalty, permanently increasing your future monthly requirements.</strong>
                                 </p>
                             </div>
                             <div>
@@ -1268,14 +1295,43 @@ export default function WealthArchitecture() {
                                     type="number"
                                     value={withdrawAmount}
                                     onChange={e => setWithdrawAmount(e.target.value)}
-                                    max={maxWithdrawable}
+                                    max={Number(stats.wealth_uni_fund)}
                                     className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-amber-500 outline-none"
                                     placeholder="0"
                                 />
                             </div>
+                            {/* M5-C: Emergency override warning */}
+                            {Number(withdrawAmount) > maxWithdrawable && Number(withdrawAmount) <= Number(stats.wealth_uni_fund) && (() => {
+                                const projectedFund = Number(stats.wealth_uni_fund) - Number(withdrawAmount);
+                                const projectedDeficit = Math.max(
+                                    0,
+                                    activeRequirementMetrics.totalRemainingCost - projectedFund
+                                );
+                                const projectedNewRequirement =
+                                    projectedDeficit / activeRequirementMetrics.totalMonthsRemaining;
+                                return (
+                                    <div className="p-3 bg-amber-950/20 border border-amber-900/30 rounded-xl text-amber-500">
+                                        <p className="text-xs font-bold mb-2">⚠️ Emergency Withdrawal — Below Safety Floor</p>
+                                        <div className="text-xs space-y-1 font-mono">
+                                            <div className="flex justify-between">
+                                                <span>Current monthly requirement:</span>
+                                                <span>LKR {activeMonthlyRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span>New monthly requirement:</span>
+                                                <span>LKR {projectedNewRequirement.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                            </div>
+                                            <div className="flex justify-between text-rose-400 font-bold">
+                                                <span>Monthly increase:</span>
+                                                <span>LKR {(projectedNewRequirement - activeMonthlyRequirement).toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
                             <button
                                 onClick={() => handleWithdrawFromFund(Number(withdrawAmount))}
-                                disabled={!withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > maxWithdrawable}
+                                disabled={!withdrawAmount || Number(withdrawAmount) <= 0 || Number(withdrawAmount) > Number(stats.wealth_uni_fund)}
                                 className="w-full py-4 mt-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-xl transition disabled:opacity-50"
                             >
                                 Withdraw to Wallet
@@ -1390,6 +1446,7 @@ export default function WealthArchitecture() {
                     <GenericModal onClose={() => setIsSweepModalOpen(false)} title="Sweep Operating Surplus">
                         <FundSweepForm
                             maxAmount={Number(stats.wallet_balance)}
+                            recurringExpensesTotal={recurringExpensesTotal}
                             onSave={async (amountToTransfer) => {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
@@ -1431,7 +1488,7 @@ export default function WealthArchitecture() {
                     <GenericModal onClose={() => setIsRecurringModalOpen(false)} title="Manage Recurring Definitions">
                         <RecurringExpForm
                             recurringList={recurringExpensesList}
-                            onSave={async (title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar) => {
+                            onSave={async (title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar, total_installments) => {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
@@ -1455,7 +1512,8 @@ export default function WealthArchitecture() {
                                     anchor_day: anchorDay,
                                     next_due_date: firstDueDate.toISOString(),
                                     end_date: endDate,
-                                    inject_to_calendar: inject_to_calendar
+                                    inject_to_calendar: inject_to_calendar,
+                                    total_installments: total_installments
                                 });
 
                                 if (error) {
@@ -1469,12 +1527,17 @@ export default function WealthArchitecture() {
                                 setIsRecurringModalOpen(false);
                             }}
                             onDelete={async (id) => {
-                                if (!window.confirm("Are you sure you want to stop this recurring allocation?")) return;
-                                await supabase.from('recurring_expenses').delete().eq('id', id);
-                                await fetchData(); // Trigger global recalc immediately
+                                const exp = recurringExpensesList.find(r => r.id === id);
+                                if (exp) {
+                                    await handleDeleteRecurring(exp);
+                                } else {
+                                    if (!window.confirm("Are you sure you want to stop this recurring allocation?")) return;
+                                    await supabase.from('recurring_expenses').delete().eq('id', id);
+                                    await fetchData();
+                                }
                             }}
                             onMarkPaid={handleMarkRecurringPaid}
-                            onUpdate={async (id, title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar) => {
+                            onUpdate={async (id, title, amount, firstDueDateStr, billingFrequency, period, is_automatic, inject_to_calendar, total_installments) => {
                                 const { data: { user } } = await supabase.auth.getUser();
                                 if (!user) return;
 
@@ -1496,7 +1559,8 @@ export default function WealthArchitecture() {
                                     anchor_day: anchorDay,
                                     next_due_date: firstDueDate.toISOString(),
                                     end_date: endDate,
-                                    inject_to_calendar: inject_to_calendar
+                                    inject_to_calendar: inject_to_calendar,
+                                    total_installments: total_installments
                                 }).eq('id', id);
 
                                 if (error) {
@@ -1512,402 +1576,5 @@ export default function WealthArchitecture() {
                 )}
             </AnimatePresence>
         </div>
-    );
-}
-
-function GenericModal({ children, title, onClose }: any) {
-    return (
-        <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/80 backdrop-blur-sm sm:p-4" onClick={onClose}>
-            <motion.div
-                initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-                className="w-full sm:max-w-md bg-zinc-950 border-t sm:border border-zinc-800 rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl relative"
-                onClick={(e) => e.stopPropagation()}
-            >
-                <div className="absolute top-4 right-4 text-zinc-500 hover:text-white transition-colors cursor-pointer bg-black/30 w-8 h-8 rounded-full flex justify-center items-center border border-zinc-800/50" onClick={onClose} title="Close">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6L6 18M6 6l12 12" /></svg>
-                </div>
-                <div className="w-12 h-1.5 bg-zinc-800 rounded-full mx-auto mb-6 cursor-pointer" onClick={onClose} />
-                <h2 className="text-xl font-bold text-white mb-6 pr-8">{title}</h2>
-                {children}
-            </motion.div>
-        </div>
-    );
-}
-
-function ExpenseForm({ onSave }: { onSave: (amount: number, reason: string) => Promise<void> }) {
-    const [amount, setAmount] = useState('');
-    const [reason, setReason] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    return (
-        <div className="space-y-4">
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Amount (LKR)</label>
-                <input type="number" required value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-rose-500 outline-none disabled:opacity-50" placeholder="0" />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Mandatory Reason</label>
-                <input type="text" required value={reason} onChange={e => setReason(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-rose-500 outline-none disabled:opacity-50" placeholder="e.g. Uber, Groceries" />
-            </div>
-            <button
-                onClick={async () => {
-                    if (amount && reason) {
-                        setIsSubmitting(true);
-                        await onSave(Number(amount), reason);
-                        setIsSubmitting(false);
-                    }
-                }}
-                disabled={!amount || !reason || isSubmitting}
-                className="w-full py-4 mt-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
-            >
-                {isSubmitting ? 'Processing Network...' : 'Deduct from Wallet'}
-            </button>
-        </div>
-    )
-}
-
-function PriorityForm({ onSave }: { onSave: (title: string, amount: number, dateStr: string) => Promise<void> }) {
-    const [title, setTitle] = useState('');
-    const [amount, setAmount] = useState('');
-    const [date, setDate] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    return (
-        <div className="space-y-4 pb-12">
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Item / Goal</label>
-                <input type="text" value={title} onChange={e => setTitle(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-indigo-500 outline-none disabled:opacity-50" placeholder="e.g. New Macbook" />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Cost (LKR)</label>
-                <input type="number" value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-indigo-500 outline-none disabled:opacity-50" placeholder="0" />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Target Date</label>
-                <input type="date" value={date} onChange={e => setDate(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white [color-scheme:dark] outline-none disabled:opacity-50" />
-            </div>
-            <button
-                onClick={async () => {
-                    if (title && amount && date) {
-                        setIsSubmitting(true);
-                        await onSave(title, Number(amount), date);
-                        setIsSubmitting(false);
-                    }
-                }}
-                disabled={!title || !amount || !date || isSubmitting}
-                className="w-full py-4 mt-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
-            >
-                {isSubmitting ? 'Computing...' : 'Compute Feasibility Projection'}
-            </button>
-        </div>
-    )
-}
-
-function AddFundForm({ onSave }: { onSave: (amount: number, dateStr: string, source: string) => Promise<void> }) {
-    const [amount, setAmount] = useState('');
-    const [date, setDate] = useState(getLocalISODate());
-    const [source, setSource] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    return (
-        <div className="space-y-4 pb-12">
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Amount (LKR)</label>
-                <input type="number" required value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none disabled:opacity-50" placeholder="0" />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Deposit / Received Date</label>
-                <input type="date" required value={date} onChange={e => setDate(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white [color-scheme:dark] outline-none disabled:opacity-50" />
-            </div>
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Source / Description</label>
-                <input type="text" value={source} onChange={e => setSource(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-emerald-500 outline-none disabled:opacity-50" placeholder="e.g. Past Savings, Family Gift" />
-            </div>
-            <button
-                onClick={async () => {
-                    if (amount && date) {
-                        setIsSubmitting(true);
-                        await onSave(Number(amount), date, source || 'External Transfer');
-                        setIsSubmitting(false);
-                    }
-                }}
-                disabled={!amount || !date || isSubmitting}
-                className="w-full py-4 mt-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
-            >
-                {isSubmitting ? 'Securing Transaction...' : 'Add Directly to Fund'}
-            </button>
-        </div>
-    )
-}
-
-function FundSweepForm({ maxAmount, onSave }: { maxAmount: number, onSave: (amount: number) => Promise<void> }) {
-    const [amount, setAmount] = useState('');
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    return (
-        <div className="space-y-4 pb-12">
-            <div>
-                <label className="text-xs font-bold text-zinc-500 uppercase flex justify-between mb-2">
-                    <span>Amount to Sweep</span>
-                    <button onClick={() => setAmount(maxAmount.toString())} className="text-indigo-400 hover:text-indigo-300">Set Max (LKR {maxAmount.toLocaleString()})</button>
-                </label>
-                <input type="number" required value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-4 text-white focus:border-indigo-500 outline-none disabled:opacity-50" placeholder="0" />
-            </div>
-
-            <div className="flex justify-between text-xs text-zinc-400 px-1 py-4">
-                <span>Remaining Wallet Balance:</span>
-                <span className="font-mono font-bold text-white">LKR {Math.max(0, maxAmount - Number(amount || 0)).toLocaleString()}</span>
-            </div>
-
-            <button
-                onClick={async () => {
-                    const numAmount = Number(amount);
-                    if (numAmount > 0 && numAmount <= maxAmount) {
-                        setIsSubmitting(true);
-                        await onSave(numAmount);
-                        setIsSubmitting(false);
-                    } else {
-                        alert(`Amount must be between 1 and max limit`);
-                    }
-                }}
-                disabled={!amount || isSubmitting || Number(amount) <= 0 || Number(amount) > maxAmount}
-                className="w-full py-4 mt-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold rounded-xl transition"
-            >
-                {isSubmitting ? 'Transferring...' : 'Execute Sweep to Uni Fund'}
-            </button>
-        </div>
-    )
-}
-
-function RecurringExpForm({
-    recurringList,
-    onSave,
-    onDelete,
-    onMarkPaid,
-    onUpdate
-}: {
-    recurringList: RecurringExpense[],
-    onSave: (title: string, amount: number, firstDueDateStr: string, billingFrequency: 'monthly' | 'annually', period: number, is_automatic: boolean, inject_to_calendar: boolean) => Promise<void>,
-    onDelete: (id: string) => void,
-    onMarkPaid: (exp: RecurringExpense) => void,
-    onUpdate: (id: string, title: string, amount: number, firstDueDateStr: string, billingFrequency: 'monthly' | 'annually', period: number, is_automatic: boolean, inject_to_calendar: boolean) => Promise<void>
-}) {
-    const [editingId, setEditingId] = useState<string | null>(null);
-    const [title, setTitle] = useState('');
-    const [amount, setAmount] = useState('');
-    const [firstDueDate, setFirstDueDate] = useState(getLocalISODate());
-    const [billingFrequency, setBillingFrequency] = useState<'monthly' | 'annually'>('monthly');
-    const [period, setPeriod] = useState('0'); // 0 means infinite
-    const [customPeriod, setCustomPeriod] = useState('');
-    const [isAutomatic, setIsAutomatic] = useState(false);
-    const [injectToCalendar, setInjectToCalendar] = useState(true);
-    const [isSubmitting, setIsSubmitting] = useState(false);
-
-    // Auto-adjust period limits when switching to annual
-    useEffect(() => {
-        if (billingFrequency === 'annually') {
-            setPeriod('0');
-            setCustomPeriod('');
-        }
-    }, [billingFrequency]);
-
-    const handleEdit = (exp: any) => {
-        setEditingId(exp.id);
-        setTitle(exp.title);
-        setAmount(exp.amount.toString());
-        setFirstDueDate(formatDate(new Date(exp.next_due_date)));
-        setBillingFrequency(exp.billing_frequency || 'monthly');
-        setIsAutomatic(exp.is_automatic || false);
-        setInjectToCalendar(exp.inject_to_calendar ?? true); // Default to true if undefined
-
-        if (!exp.end_date) {
-            setPeriod('0');
-            setCustomPeriod('');
-        } else {
-            const start = new Date(exp.next_due_date);
-            const end = new Date(exp.end_date);
-            let months = (end.getFullYear() - start.getFullYear()) * 12;
-            months -= start.getMonth();
-            months += end.getMonth();
-            months += 1;
-
-            const standardPeriods = ['1', '3', '6', '12', '24', '36'];
-            const strMonths = months.toString();
-            if (standardPeriods.includes(strMonths)) {
-                setPeriod(strMonths);
-                setCustomPeriod('');
-            } else {
-                setPeriod('custom');
-                setCustomPeriod(strMonths);
-            }
-        }
-    };
-
-    const cancelEdit = () => {
-        setEditingId(null);
-        setTitle(''); setAmount(''); setFirstDueDate(getLocalISODate()); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly'); setInjectToCalendar(true);
-    };
-
-    return (
-        <div className="space-y-6 pb-12">
-            {/* Form */}
-            <div className={`border p-4 rounded-2xl space-y-4 transition-colors ${editingId ? 'bg-indigo-950/20 border-indigo-900/50' : 'bg-zinc-900 border-zinc-800'}`}>
-                {editingId ? (
-                    <div className="flex items-center justify-between mb-2">
-                        <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
-                            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                            Edit Subscription
-                        </h3>
-                        <button onClick={cancelEdit} className="text-xs font-bold text-zinc-400 hover:text-white transition-colors">Cancel</button>
-                    </div>
-                ) : (
-                    <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2"><PlusCircle className="w-4 h-4 text-emerald-500" /> Add Subscription</h3>
-                )}
-                <div>
-                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Title</label>
-                    <input type="text" required value={title} onChange={e => setTitle(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none disabled:opacity-50" placeholder="e.g. Netflix, Gym" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                    <div>
-                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Amount (LKR)</label>
-                        <input type="number" required value={amount} onChange={e => setAmount(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none disabled:opacity-50" placeholder="0" />
-                    </div>
-                    <div>
-                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Billing Freq.</label>
-                        <select
-                            value={billingFrequency}
-                            onChange={(e) => setBillingFrequency(e.target.value as 'monthly' | 'annually')}
-                            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/50"
-                        >    <option value="monthly">Monthly</option>
-                            <option value="annually">Annually</option>
-                        </select>
-                    </div>
-                    <div className="col-span-2">
-                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">First/Next Due Date</label>
-                        <input type="date" required value={firstDueDate} onChange={e => setFirstDueDate(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white [color-scheme:dark] outline-none disabled:opacity-50" />
-                    </div>
-                    <div className="flex items-center gap-2 py-1 col-span-2 mb-2">
-                        <input
-                            type="checkbox"
-                            id="autoCheck"
-                            checked={isAutomatic}
-                            onChange={(e) => setIsAutomatic(e.target.checked)}
-                            disabled={isSubmitting}
-                            className="w-4 h-4 rounded appearance-none border border-zinc-700 bg-black/50 checked:bg-emerald-500 checked:border-emerald-500 flex items-center justify-center relative after:content-[''] after:hidden checked:after:block after:w-1.5 after:h-2.5 after:border-r-2 after:border-b-2 after:border-white after:rotate-45 after:-mt-0.5"
-                        />
-                        <label htmlFor="autoCheck" className="text-xs text-zinc-400 cursor-pointer select-none">
-                            Drawn Automatically (No Manual Mark Paid)
-                        </label>
-                    </div>
-                    <div className="flex items-center gap-2 py-1 col-span-2">
-                        <input
-                            type="checkbox"
-                            id="injectToCalendar"
-                            checked={injectToCalendar}
-                            onChange={(e) => setInjectToCalendar(e.target.checked)}
-                            disabled={isSubmitting}
-                            className="w-4 h-4 rounded appearance-none border border-zinc-700 bg-black/50 checked:bg-emerald-500 checked:border-emerald-500 flex items-center justify-center relative after:content-[''] after:hidden checked:after:block after:w-1.5 after:h-2.5 after:border-r-2 after:border-b-2 after:border-white after:rotate-45 after:-mt-0.5"
-                        />
-                        <label htmlFor="injectToCalendar" className="text-xs text-zinc-400 cursor-pointer select-none">
-                            Inject to Calendar (Google Calendar)
-                        </label>
-                    </div>
-                </div>
-
-                <div className="mb-2">
-                    <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Total Duration</label>
-                    <select value={period} onChange={e => setPeriod(e.target.value)} disabled={isSubmitting || billingFrequency === 'annually'} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white outline-none focus:border-emerald-500 disabled:opacity-50">
-                        <option value="0">Forever (No Expiry)</option>
-                        <option value="1">1 Month</option>
-                        <option value="3">3 Months</option>
-                        <option value="6">6 Months</option>
-                        <option value="12">12 Months (1 Year)</option>
-                        <option value="24">24 Months (2 Years)</option>
-                        <option value="36">36 Months (3 Years)</option>
-                        <option value="custom">Custom (Months)</option>
-                    </select>
-                </div>
-
-                {period === 'custom' && (
-                    <div className="mb-4">
-                        <label className="text-xs font-bold text-zinc-500 uppercase block mb-2">Custom Duration (Months)</label>
-                        <input type="number" min="1" value={customPeriod} onChange={e => setCustomPeriod(e.target.value)} disabled={isSubmitting} className="w-full bg-black/50 border border-zinc-800 rounded-xl p-3 text-white focus:border-emerald-500 outline-none disabled:opacity-50" placeholder="e.g. 18" />
-                    </div>
-                )}
-
-                <button
-                    onClick={async () => {
-                        let finalPeriod = Number(period);
-                        if (period === 'custom') {
-                            finalPeriod = Number(customPeriod);
-                            if (!finalPeriod || finalPeriod < 1) {
-                                alert("Please enter a valid custom duration in months.");
-                                return;
-                            }
-                        }
-
-                        if (title && amount && firstDueDate) {
-                            setIsSubmitting(true);
-                            if (editingId) {
-                                await onUpdate(editingId, title, Number(amount), firstDueDate, billingFrequency, Number(period) || 0, isAutomatic, injectToCalendar);
-                            } else {
-                                await onSave(title, Number(amount), firstDueDate, billingFrequency, Number(period) || 0, isAutomatic, injectToCalendar);
-                            }
-                            setIsSubmitting(false); setFirstDueDate(getLocalISODate()); setPeriod('0'); setCustomPeriod(''); setIsAutomatic(false); setBillingFrequency('monthly');
-                        }
-                        setIsSubmitting(false);
-                    }}
-                    disabled={!title || !amount || isSubmitting}
-                    className={`w-full py-3 mt-2 disabled:opacity-50 text-white font-bold rounded-xl transition ${editingId ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
-                >
-                    {isSubmitting ? (editingId ? 'Saving Changes...' : 'Saving Definition...') : (editingId ? 'Update Subscription' : 'Add to Monthly Debits')}
-                </button>
-            </div>
-
-            {/* List */}
-            <div>
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3">Active Definitions</h3>
-                <div className="space-y-2">
-                    {recurringList.map(exp => {
-                        const todayStart = new Date();
-                        todayStart.setHours(0, 0, 0, 0);
-                        const dueDate = new Date(exp.next_due_date);
-                        dueDate.setHours(0, 0, 0, 0);
-                        const isDue = todayStart >= dueDate;
-
-                        return (
-                            <div key={exp.id} className={`flex items-center justify-between p-3 rounded-xl border transition-all ${!isDue ? 'bg-zinc-900/30 border-zinc-800/50 opacity-60' : 'bg-zinc-900/50 border-zinc-700'}`}>
-                                <div>
-                                    <span className={`font-bold text-sm block ${!isDue ? 'text-zinc-500 line-through' : 'text-white'}`}>{exp.title}</span>
-                                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1 block">
-                                        Due {exp.billing_frequency === 'annually' ? 'Annually' : 'Monthly'} on {formatDate(new Date(exp.next_due_date))}
-                                    </span>
-                                </div>
-                                <div className="flex items-center gap-4">
-                                    <span className={`font-mono font-bold ${!isDue ? 'text-zinc-500' : 'text-rose-400'}`}>
-                                        LKR {exp.amount.toLocaleString()}
-                                    </span>
-
-                                    <div className="flex items-center gap-1">
-                                        {isDue && (
-                                            <button onClick={() => onMarkPaid(exp)} className="text-zinc-600 hover:text-emerald-500 transition-colors p-1" title="Mark Paid & Deduct from Wallet">
-                                                <CheckCircle2 className="w-4 h-4" />
-                                            </button>
-                                        )}
-                                        <button onClick={() => handleEdit(exp)} className="text-zinc-600 hover:text-indigo-500 transition-colors p-1" title="Edit Subscription">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                                        </button>
-                                        <button onClick={() => onDelete(exp.id)} className="text-zinc-600 hover:text-rose-500 transition-colors p-1" title="Delete Expense Component">
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4"><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        );
-                    })}
-                    {recurringList.length === 0 && <div className="text-center text-xs text-zinc-600 py-4">No recurring limits set.</div>}
-                </div>
-            </div>
-        </div >
     );
 }
